@@ -9,6 +9,8 @@ use std::{path::PathBuf, sync::Arc};
 use anvil_domain::{
     conversation::Conversation,
     error::{DomainError, DomainResult},
+    history,
+    id::ConversationId,
     model::{InferenceSettings, ModelId, ModelRole},
     ports::{ChatEngine, DownloadProgress, GenerationProgress, ModelProvisioner, SecretKey},
     workspace::Workspace,
@@ -82,7 +84,20 @@ impl From<&anvil_domain::conversation::Message> for MessageView {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ConversationSummaryView {
+    pub id: String,
+    pub title: String,
+    pub pinned: bool,
+    pub message_count: u32,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SessionView {
+    /// Otevrena konverzace. `None`, dokud zadna neni.
+    pub conversation_id: Option<String>,
+    /// Prave bezi generovani - postranni panel to ma u konverzace ukazat.
+    pub generating: bool,
     pub loaded_model: Option<String>,
     pub plan_description: Option<String>,
     pub workspace_path: Option<String>,
@@ -420,8 +435,142 @@ pub async fn get_session(state: State<'_, AppState>) -> CommandResult<SessionVie
 
 #[tauri::command]
 pub async fn new_conversation(state: State<'_, AppState>) -> CommandResult<SessionView> {
-    state.session.lock().await.conversation = Some(Conversation::new(""));
+    let existujici = state.conversations.list().await?;
+
+    let mut nova = Conversation::new("Nova konverzace");
+    nova.sort_order = history::order_for_new(&existujici);
+    state.conversations.save(&nova).await?;
+
+    state.session.lock().await.conversation = Some(nova);
     session_view(&state).await
+}
+
+// --- Historie -------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_conversations(
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<ConversationSummaryView>> {
+    Ok(state
+        .conversations
+        .list()
+        .await?
+        .into_iter()
+        .map(|c| ConversationSummaryView {
+            id: c.id.to_string(),
+            title: c.title,
+            pinned: c.pinned,
+            message_count: c.message_count,
+            updated_at: c
+                .updated_at
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn open_conversation(
+    state: State<'_, AppState>,
+    id: String,
+) -> CommandResult<SessionView> {
+    let id = parse_id(&id)?;
+
+    // Rozepsanou konverzaci ulozit, nez se prepne - jinak by se ztratilo,
+    // co uzivatel napsal tesne predtim.
+    let otevrena = state.session.lock().await.conversation.clone();
+    if let Some(otevrena) = otevrena {
+        if let Err(e) = state.conversations.save(&otevrena).await {
+            tracing::warn!(error = %e, "Predchozi konverzaci se nepodarilo ulozit");
+        }
+    }
+
+    let nactena = state.conversations.load(id).await?;
+    state.session.lock().await.conversation = Some(nactena);
+    session_view(&state).await
+}
+
+#[tauri::command]
+pub async fn rename_conversation(
+    state: State<'_, AppState>,
+    id: String,
+    title: String,
+) -> CommandResult<()> {
+    let id = parse_id(&id)?;
+    state.conversations.rename(id, &title).await?;
+
+    // Kdyz je prejmenovana prave otevrena, musi se nazev srovnat i v pameti -
+    // jinak by ho pristi ulozeni prepsalo zpatky.
+    let mut session = state.session.lock().await;
+    if let Some(c) = session.conversation.as_mut() {
+        if c.id == id {
+            c.title = title.trim().to_string();
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pin_conversation(
+    state: State<'_, AppState>,
+    id: String,
+    pinned: bool,
+) -> CommandResult<()> {
+    let id = parse_id(&id)?;
+    state.conversations.set_pinned(id, pinned).await?;
+
+    let mut session = state.session.lock().await;
+    if let Some(c) = session.conversation.as_mut() {
+        if c.id == id {
+            c.pinned = pinned;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn reorder_conversations(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> CommandResult<()> {
+    let ids: Result<Vec<_>, _> = ids.iter().map(|i| parse_id(i)).collect();
+    state.conversations.reorder(&ids?).await?;
+
+    // Poradi je v pameti taky, aby ho pristi ulozeni otevrene konverzace
+    // nevratilo na starou hodnotu.
+    let seznam = state.conversations.list().await?;
+    let mut session = state.session.lock().await;
+    if let Some(c) = session.conversation.as_mut() {
+        if let Some(aktualni) = seznam.iter().find(|s| s.id == c.id) {
+            c.sort_order = aktualni.sort_order;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_conversation(
+    state: State<'_, AppState>,
+    id: String,
+) -> CommandResult<SessionView> {
+    let id = parse_id(&id)?;
+    state.conversations.delete(id).await?;
+
+    // Smazani otevrene konverzace nesmi nechat v okne zpravy, ktere uz
+    // nikde nejsou.
+    {
+        let mut session = state.session.lock().await;
+        if session.conversation.as_ref().is_some_and(|c| c.id == id) {
+            session.conversation = None;
+        }
+    }
+
+    session_view(&state).await
+}
+
+fn parse_id(raw: &str) -> DomainResult<ConversationId> {
+    raw.parse()
+        .map_err(|_| DomainError::validation(format!("'{raw}' neni platne ID konverzace")))
 }
 
 /// Odešle dotaz. Tokeny chodí událostí `generation:delta`, výsledné
@@ -475,8 +624,15 @@ pub async fn send_message(
         )
         .await;
 
-    // Konverzaci vrátit zpátky ať to dopadlo jakkoli — jinak by se po chybě
-    // ztratila celá historie.
+    // Ulozit driv, nez se cokoli dalsiho stane, a bez ohledu na to, jak tah
+    // dopadl. Castecna odpoved po zruseni i samotny dotaz po chybe jsou pro
+    // uzivatele cennejsi nez cista databaze.
+    if let Err(e) = state.conversations.save(&conversation).await {
+        tracing::error!(error = %e, "Konverzaci se nepodarilo ulozit");
+    }
+
+    // Konverzaci vratit zpatky at to dopadlo jakkoli - jinak by se po chybe
+    // ztratila cela historie.
     {
         let mut session = state.session.lock().await;
         session.conversation = Some(conversation);
@@ -514,6 +670,8 @@ async fn session_view(state: &State<'_, AppState>) -> CommandResult<SessionView>
     let c = session.conversation.as_ref().unwrap_or(&prazdna);
 
     Ok(SessionView {
+        conversation_id: session.conversation.as_ref().map(|c| c.id.to_string()),
+        generating: session.generating,
         loaded_model: session.loaded_model.as_ref().map(ModelId::to_string),
         plan_description: session.plan_description.clone(),
         workspace_path: session

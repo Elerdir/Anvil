@@ -30,8 +30,9 @@ pub fn run() {
                 );
             }
 
-            let state = AppState::new();
-            app.manage(state);
+            // Otevření databáze je asynchronní; `setup` běží dřív, než se
+            // rozjede smyčka událostí, takže se na něj tady čeká.
+            app.manage(tauri::async_runtime::block_on(AppState::new()));
 
             // Naposledy otevřenou složku obnovíme na pozadí, ať se okno
             // neukáže až po sáhnutí na disk.
@@ -56,6 +57,12 @@ pub fn run() {
             commands::set_workspace,
             commands::get_session,
             commands::new_conversation,
+            commands::list_conversations,
+            commands::open_conversation,
+            commands::rename_conversation,
+            commands::pin_conversation,
+            commands::reorder_conversations,
+            commands::delete_conversation,
             commands::send_message,
             commands::cancel_generation,
         ])

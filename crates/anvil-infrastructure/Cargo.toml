@@ -38,6 +38,7 @@ tracing = { workspace = true }
 time = { workspace = true }
 reqwest = { workspace = true }
 sha2 = { workspace = true }
+sqlx = { workspace = true }
 keyring = { workspace = true }
 directories = { workspace = true }
 

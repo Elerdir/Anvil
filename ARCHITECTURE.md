@@ -58,6 +58,7 @@ neprovádějí.
 - `ai/llama_engine` — `ChatEngine` nad llama.cpp
 - `ai/model_downloader`, `ai/chunk_plan` — paralelní stahování s resume
 - `model_provisioner` — najít / zkopírovat / stáhnout model
+- `conversation_store` — historie v SQLite
 - `secrets`, `settings_store`, `paths`, `huggingface`
 
 ## Rozhodnutí, která stojí za vysvětlení
@@ -142,6 +143,23 @@ neviděl.
 
 První tah nad novým obsahem tu cenu zaplatí celou; to je limit, se kterým
 je potřeba u code review počítat.
+
+### Mřížka rozvržení nesmí spoléhat na pořadí prvků
+
+`grid-template-rows` přiřazuje řádky podle pořadí potomků. Když se pruh
+s chybou nevykreslil, posunul se seznam zpráv o řádek výš a `1fr` dostalo
+pole pro dotaz — to pak viselo uprostřed okna místo dole.
+
+Kontejnery `.notices` a `.dock` jsou proto v DOM **vždycky**, i prázdné.
+Podmíněné je až to, co je uvnitř nich.
+
+### Pořadí konverzací je explicitní číslo
+
+Ne odvozené z času poslední zprávy: uživatel si seznam rovná a připíná podle
+sebe a kdyby o pořadí rozhodovala aktivita, každá odpověď by mu ho zamíchala.
+Přerovnání se posílá jako celý seznam ID a čísla se přepočítají od nuly —
+u desítek konverzací je to levné a odpadá tím vkládání mezi dvě sousední
+hodnoty.
 
 ### `AppSettings` nelze složit pozičně
 

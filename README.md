@@ -9,6 +9,8 @@ Windows a macOS (Apple Silicon i Intel).
 ## Co umí teď
 
 - Chat s lokálním modelem, odpovědi česky
+- **Historie konverzací** v postranním panelu — přejmenování, připnutí,
+  přerovnání tažením, indikace běžící odpovědi
 - **Dva sloty na modely** — jeden laděný na kód, druhý na češtinu, přepínatelné
 - Výběr složky projektu rovnou nad polem pro dotaz
 - Stahování modelů (8 spojení, resume po přerušení, ~10 MB/s místo 2)
@@ -21,7 +23,7 @@ Windows a macOS (Apple Silicon i Intel).
 | Fáze | Co |
 |---|---|
 | 2 | Nástroje pro čtení souborů + agentní smyčka → **code review** |
-| 3 | Historie konverzací v SQLite, větvení |
+| 3 | Větvení konverzace |
 | 4 | Úpravy souborů s náhledem diffu a potvrzením |
 | 5 | Vytvoření projektu od nuly |
 
