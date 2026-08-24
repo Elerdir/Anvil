@@ -114,7 +114,22 @@ impl ChannelFilter {
                 continue;
             }
 
-            match self.pending.find(CHANNEL_OPEN) {
+            let otevreni = self.pending.find(CHANNEL_OPEN);
+            let uzavreni = self.pending.find(CHANNEL_CLOSE);
+
+            // Zavírací značka bez otevírací je zmrzačená hlavička kanálu.
+            // Gemma při review posílala `<thought <channel|>` — tedy `thought`
+            // bez `<|channel>` před ním — a filtr to pouštěl ven jako text,
+            // takže se uživateli v okně objevovalo `<thought <channel|>`
+            // před každou odpovědí. Bere se to jako hlavička, protože nic
+            // jiného to být nemůže: `<channel|>` se v české ani anglické
+            // próze nevyskytuje.
+            if let Some(konec) = uzavreni.filter(|k| otevreni.is_none_or(|o| *k < o)) {
+                self.zpracuj_zmrzacenou_hlavicku(konec, &mut visible);
+                continue;
+            }
+
+            match otevreni {
                 Some(pos) => {
                     if self.hidden {
                         let dropped = self.pending[..pos].to_string();
@@ -127,7 +142,7 @@ impl ChannelFilter {
                 }
                 None => {
                     // Konec může být začátek značky — ten si necháme.
-                    let keep = partial_marker_len(&self.pending);
+                    let keep = drzet_na_konci(&self.pending);
                     let split = self.pending.len() - keep;
                     let ready: String = self.pending.drain(..split).collect();
                     if self.hidden {
@@ -141,6 +156,34 @@ impl ChannelFilter {
         }
 
         visible
+    }
+
+    /// Zpracuje `…<jméno <channel|>` — hlavičku, které chybí `<|channel>`.
+    ///
+    /// Jméno se hledá od poslední `<` před zavírací značkou. Když tam žádná
+    /// není (nebo je nesmyslně daleko), zůstane jméno prázdné a kanál se
+    /// bere jako viditelný — spolknout tichem kus odpovědi je horší než
+    /// nechat proklouznout pár znaků navíc.
+    fn zpracuj_zmrzacenou_hlavicku(&mut self, konec: usize, visible: &mut String) {
+        /// Nejdelší jméno kanálu, které ještě dává smysl.
+        const MAX_JMENO: usize = 64;
+
+        let pred = &self.pending[..konec];
+        let zacatek = pred
+            .rfind('<')
+            .filter(|i| konec - i <= MAX_JMENO && !pred[*i..].contains('\n'))
+            .unwrap_or(konec);
+
+        let jmeno = pred[zacatek..].trim_start_matches('<').to_ascii_lowercase();
+        let pred_hlavickou = self.pending[..zacatek].to_string();
+        if self.hidden {
+            self.remember_hidden(&pred_hlavickou);
+        } else {
+            visible.push_str(&pred_hlavickou);
+        }
+
+        self.pending.drain(..konec + CHANNEL_CLOSE.len());
+        self.hidden = jmeno.contains(THOUGHT);
     }
 
     /// Text, který filtr zahodil jako vnitřní uvažování modelu.
@@ -191,6 +234,42 @@ impl ChannelFilter {
 /// dvoubajtové `ž`, a krájet řetězec naslepo po bajtech by na něm spadlo.
 /// Pozice, které nejsou hranicí znaku, proto přeskakujeme — stejně na nich
 /// žádná ASCII značka začínat nemůže.
+/// Kolik znaků z konce si ještě nechat.
+///
+/// Kromě rozečtené značky drží i **jméno kanálu před ní**. Zmrzačená
+/// hlavička `<thought <channel|>` se totiž rozdělí mezi dvě dávky tokenů
+/// jako `<thought <chan` + `nel|>`, a kdyby se `<thought ` pustilo ven hned,
+/// zavírací značka by dorazila pozdě a jméno by uživateli zůstalo v textu.
+///
+/// Zpátky se sahá jen tehdy, když se **už tak drží rozečtená značka** —
+/// běžný text s `<` (třeba `Vec<String>`) se tím nezdržuje.
+fn drzet_na_konci(text: &str) -> usize {
+    /// Delší jméno kanálu už není jméno kanálu.
+    const MAX_JMENO: usize = 32;
+
+    let keep = partial_marker_len(text);
+    if keep == 0 {
+        return 0;
+    }
+
+    let hranice = text.len() - keep;
+    let pred = &text[..hranice];
+    let Some(zacatek) = pred.rfind('<') else {
+        return keep;
+    };
+    let jmeno = &pred[zacatek + 1..];
+    let vypada_jako_jmeno = hranice - zacatek <= MAX_JMENO
+        && jmeno
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-'));
+
+    if vypada_jako_jmeno {
+        text.len() - zacatek
+    } else {
+        keep
+    }
+}
+
 fn partial_marker_len(text: &str) -> usize {
     let max = LONGEST_MARKER.min(text.len());
     for len in (1..=max).rev() {
@@ -198,7 +277,11 @@ fn partial_marker_len(text: &str) -> usize {
         if !text.is_char_boundary(start) {
             continue;
         }
-        if CHANNEL_OPEN.starts_with(&text[start..]) {
+        // Obě značky: zavírací může přijít i bez otevírací (viz
+        // `zpracuj_zmrzacenou_hlavicku`) a rozseknutá mezi dvě dávky
+        // tokenů by pak proklouzla ven jako text.
+        let konec = &text[start..];
+        if CHANNEL_OPEN.starts_with(konec) || CHANNEL_CLOSE.starts_with(konec) {
             return len;
         }
     }
@@ -273,6 +356,47 @@ mod tests {
         assert_eq!(
             run(&["Začátek. <|channel>thought<channel|>skryté"]),
             "Začátek. "
+        );
+    }
+
+    /// Přesně tohle posílala Gemma 4 v každém kole review: hlavičku kanálu
+    /// bez `<|channel>` na začátku. Filtr ji pouštěl ven, takže se
+    /// uživateli nad každou odpovědí objevovalo `<thought <channel|>`.
+    #[test]
+    fn mangled_channel_header_is_not_shown() {
+        assert_eq!(run(&["<thought <channel|>"]), "");
+        assert_eq!(
+            run(&["<thought <channel|>skryté<|channel>final<channel|>vidět"]),
+            "vidět"
+        );
+    }
+
+    #[test]
+    fn text_before_a_mangled_header_survives() {
+        assert_eq!(run(&["Začátek. <thought <channel|>skryté"]), "Začátek. ");
+    }
+
+    #[test]
+    fn mangled_header_of_a_visible_channel_keeps_the_text() {
+        // Neznámý kanál je vidět — spolknout kus odpovědi je horší chyba
+        // než nechat proklouznout hlavičku.
+        assert_eq!(
+            run(&["<commentary <channel|>tohle je vidět"]),
+            "tohle je vidět"
+        );
+    }
+
+    #[test]
+    fn mangled_header_split_across_chunks_still_works() {
+        assert_eq!(run(&["<thought <chan", "nel|>skryté"]), "");
+    }
+
+    #[test]
+    fn closing_marker_far_from_any_bracket_only_drops_itself() {
+        // Bez rozumného jména se kanál bere jako viditelný a text zůstane.
+        assert_eq!(
+            run(&["obyčejná věta <channel|>a pokračování"]),
+            "obyčejná věta a pokračování"
         );
     }
 

@@ -136,6 +136,29 @@ impl AgentLoop {
         self
     }
 
+    /// Kolik kol před koncem se má model dozvědět, že mu docházejí.
+    ///
+    /// Dvě: v předposledním ještě stihne nahlásit, co našel, a v posledním
+    /// to shrnout. Jedno by na obojí nestačilo.
+    const VAROVAT_PRED_KONCEM: u32 = 2;
+
+    /// Upozornění na docházející kola, které se přilepí k výsledkům nástrojů.
+    fn dochazi_kola(&self, rounds: u32) -> Option<String> {
+        let zbyva = self.max_rounds.saturating_sub(rounds);
+        if zbyva == 0 || zbyva > Self::VAROVAT_PRED_KONCEM {
+            return None;
+        }
+        Some(match zbyva {
+            1 => "[Zbývá poslední kolo. Nahlas, co jsi zatím našel, a napiš shrnutí — \
+                  další nástroj už se nespustí.]"
+                .to_string(),
+            n => format!(
+                "[Zbývají {n} kola. Začni hlásit nálezy, ať o ně nepřijdeš, \
+                 a pak to shrň.]"
+            ),
+        })
+    }
+
     /// Odpracuje zadání. Konverzace se mění na místě — po návratu je v ní
     /// celý průběh včetně volání nástrojů a jejich výsledků.
     pub async fn run(
@@ -220,7 +243,17 @@ impl AgentLoop {
                 Message::assistant(outcome.text.trim()).with_token_count(outcome.generated_tokens),
             );
 
-            let (vysledky, vse_spatne) = self.execute(&parsed, toolbox, &on_event).await;
+            let (mut vysledky, vse_spatne) = self.execute(&parsed, toolbox, &on_event).await;
+
+            // Kolik kol zbývá, model odjinud netuší. Bez upozornění se
+            // rozhlíží, dokud mu smyčka nedojde — a uživatel pak dostane
+            // „12 z 12 kol" a prázdný výsledek, protože model si závěr
+            // schovával na konec, který nikdy nepřišel.
+            if let Some(varovani) = self.dochazi_kola(rounds) {
+                vysledky.push_str("\n\n");
+                vysledky.push_str(&varovani);
+            }
+
             conversation.push(Message::new(Role::Tool, vysledky));
 
             if vse_spatne {
@@ -416,6 +449,78 @@ mod tests {
             .await
             .expect("smyčka nemá selhat");
         (out, c)
+    }
+
+    // --- docházející kola ---
+
+    /// Skutečná Gemma prošla dvanáct kol, nenahlásila jediný nález a shrnutí
+    /// nechala prázdné — závěr si šetřila na konec, který nikdy nepřišel.
+    /// Kolik kol zbývá, se odjinud než z výsledků nástrojů nedozví.
+    #[tokio::test]
+    async fn pred_koncem_se_model_dozvi_ze_dochazeji_kola() {
+        let ctení = ScriptedResponse::text(volani(
+            r#"{"name":"read_file","arguments":{"path":"src/main.rs"}}"#,
+        ));
+        let (_, c) = spustit_s(
+            AgentLoop::new().with_max_rounds(5),
+            vec![
+                ctení.clone(),
+                ctení.clone(),
+                ctení.clone(),
+                ctení.clone(),
+                ctení,
+            ],
+        )
+        .await;
+
+        let vystupy: Vec<&str> = c
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .map(|m| m.content.as_str())
+            .collect();
+
+        assert_eq!(vystupy.len(), 5);
+        assert!(!vystupy[0].contains("Zbýv"), "1. kolo varovat nemá");
+        assert!(!vystupy[1].contains("Zbýv"), "2. kolo varovat nemá");
+        assert!(
+            vystupy[2].contains("Zbývají 2 kola"),
+            "předposlední varování chybí: {}",
+            vystupy[2]
+        );
+        assert!(
+            vystupy[3].contains("poslední kolo"),
+            "poslední varování chybí: {}",
+            vystupy[3]
+        );
+        // Po posledním kole už žádný tah nepřijde, takže varovat nemá koho.
+        assert!(!vystupy[4].contains("Zbýv"), "{}", vystupy[4]);
+    }
+
+    #[tokio::test]
+    async fn varovani_nezastini_vysledek_nastroje() {
+        let (_, c) = spustit_s(
+            AgentLoop::new().with_max_rounds(2),
+            vec![
+                ScriptedResponse::text(volani(
+                    r#"{"name":"read_file","arguments":{"path":"src/main.rs"}}"#,
+                )),
+                ScriptedResponse::text("Hotovo."),
+            ],
+        )
+        .await;
+
+        let vystup = c
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("výstup nástroje");
+        assert!(vystup.content.contains("fn main"), "{}", vystup.content);
+        assert!(
+            vystup.content.contains("poslední kolo"),
+            "{}",
+            vystup.content
+        );
     }
 
     // --- základní průběh ---

@@ -77,8 +77,22 @@ impl Tool for ListFiles {
     }
 
     async fn call(&self, args: &Value) -> ToolResult {
-        match self.fs.list(text_arg(args, "glob")).await {
-            Ok(soubory) if soubory.is_empty() => ToolResult::ok("Žádný soubor neodpovídá."),
+        let glob = text_arg(args, "glob");
+        match self.fs.list(glob).await {
+            // Holé „nic" model přečte jako „projekt je prázdný" a zařídí se
+            // podle toho. Když je prázdný jen výsledek filtru, musí to být
+            // ze zprávy poznat — jinak si model odnese nepravdu, kterou už
+            // nemá jak vyvrátit.
+            Ok(soubory) if soubory.is_empty() => match glob {
+                Some(g) => {
+                    let celkem = self.fs.list(None).await.map(|v| v.len()).unwrap_or(0);
+                    ToolResult::ok(format!(
+                        "Vzoru „{g}\" neodpovídá žádný soubor. Projekt jich má {celkem} — \
+                         zkus jiný vzor, nebo list_files bez vzoru."
+                    ))
+                }
+                None => ToolResult::ok("Projekt neobsahuje žádný čitelný soubor."),
+            },
             Ok(soubory) => {
                 let limit = self.fs.limits().max_listed_files as usize;
                 let orezano = soubory.len() > limit;
@@ -219,9 +233,26 @@ impl Tool for Grep {
             return ToolResult::error("Chybí hledaný vzor.");
         };
 
-        match self.fs.grep(pattern, text_arg(args, "glob")).await {
+        let glob = text_arg(args, "glob");
+        match self.fs.grep(pattern, glob).await {
+            // „Nikde se nevyskytuje" je tvrzení o celém projektu. Když se
+            // přitom hledalo jen ve výseku — nebo v ničem, protože vzor
+            // nesedl — je to lež, kterou model vezme za svou.
             Ok(hits) if hits.is_empty() => {
-                ToolResult::ok(format!("Vzor '{pattern}' se nikde nevyskytuje."))
+                let prohledano = self.fs.list(glob).await.map(|v| v.len()).unwrap_or(0);
+                ToolResult::ok(match (glob, prohledano) {
+                    (Some(g), 0) => format!(
+                        "Vzoru „{g}\" neodpovídá žádný soubor, takže se „{pattern}\" \
+                         nehledalo nikde. Zkus jiný vzor."
+                    ),
+                    (Some(g), n) => format!(
+                        "„{pattern}\" se nevyskytuje v žádném z {n} souborů, \
+                         které odpovídají vzoru „{g}\"."
+                    ),
+                    (None, n) => {
+                        format!("„{pattern}\" se nevyskytuje v žádném z {n} souborů projektu.")
+                    }
+                })
             }
             Ok(hits) => {
                 let limit = self.fs.limits().max_grep_hits as usize;
@@ -528,10 +559,40 @@ mod tests {
         assert!(r.content.contains("a dalších 7"), "{}", r.content);
     }
 
+    /// Prázdný výsledek filtru se nesmí dát splést s prázdným projektem —
+    /// skutečný model si z „žádný soubor" odnesl, že projekt nic neobsahuje.
     #[tokio::test]
-    async fn list_bez_shody_to_rekne() {
+    async fn list_bez_shody_rekne_i_kolik_souboru_projekt_ma() {
         let r = ListFiles::new(fs()).call(&json!({"glob": "*.py"})).await;
-        assert!(r.content.contains("Žádný soubor"), "{}", r.content);
+        assert!(r.content.contains("*.py"), "{}", r.content);
+        assert!(
+            r.content.contains("Projekt jich má"),
+            "z hlášky nejde poznat, že projekt soubory má: {}",
+            r.content
+        );
+    }
+
+    #[tokio::test]
+    async fn grep_bez_zasahu_rekne_kde_hledal() {
+        // „Nikde se nevyskytuje" je tvrzení o celém projektu. Když se
+        // hledalo jen ve výseku, musí to být ze zprávy poznat.
+        let r = Grep::new(fs())
+            .call(&json!({"pattern": "neexistuje", "glob": "*.rs"}))
+            .await;
+        assert!(r.content.contains("*.rs"), "{}", r.content);
+        assert!(!r.content.contains("nikde"), "{}", r.content);
+    }
+
+    #[tokio::test]
+    async fn grep_se_vzorem_bez_souboru_to_prizna() {
+        let r = Grep::new(fs())
+            .call(&json!({"pattern": "cokoli", "glob": "*.py"}))
+            .await;
+        assert!(
+            r.content.contains("nehledalo nikde"),
+            "model musí poznat, že se nehledalo vůbec: {}",
+            r.content
+        );
     }
 
     // --- read_file ---
