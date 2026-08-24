@@ -13,6 +13,7 @@ pub mod review;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
+pub use agent::runner::{AgentEvent, AgentHooks, AgentLoop};
 pub use chat::{ChatService, SendOutcome, TurnContext};
 pub use compaction::{CompactionPlan, CompactionService};
 pub use review::{ReviewOutcome, ReviewService};

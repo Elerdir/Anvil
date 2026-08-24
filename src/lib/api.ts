@@ -103,6 +103,35 @@ export interface DownloadProgress {
   bytesPerSecond: number;
 }
 
+export type Severity = "critical" | "warning" | "note";
+
+export interface FindingView {
+  file: string;
+  line: number | null;
+  severity: Severity;
+  summary: string;
+  detail: string;
+  location: string;
+}
+
+export interface ReviewReportView {
+  headline: string;
+  findings: FindingView[];
+  filesRead: string[];
+  rounds: number;
+  /** Skončilo se na limitu kol, ne proto, že model dokončil práci. */
+  hitRoundLimit: boolean;
+  summary: string;
+  totalMs: number;
+}
+
+/** Co model právě dělá. Bez toho uživatel kouká minuty na prázdné okno. */
+export type AgentEventView =
+  | { kind: "round"; round: number }
+  | { kind: "tool_called"; name: string; summary: string }
+  | { kind: "tool_finished"; name: string; ok: boolean }
+  | { kind: "prose"; text: string };
+
 /** Chyba z příkazu. `cancelled` znamená, že to zrušil uživatel. */
 export class CommandError extends Error {
   readonly cancelled: boolean;
@@ -176,6 +205,9 @@ export const api = {
   deleteConversation: (id: string) => call<SessionView>("delete_conversation", { id }),
   sendMessage: (text: string) => call<SessionView>("send_message", { text }),
   cancelGeneration: () => call<boolean>("cancel_generation"),
+
+  runReview: (focus: string | null) => call<ReviewReportView>("run_review", { focus }),
+  listTools: () => call<string[]>("list_tools"),
 };
 
 // --- Události -------------------------------------------------------------
@@ -197,6 +229,8 @@ export const events = {
 
   onDownloadProgress: (fn: (p: DownloadProgress) => void) =>
     on<DownloadProgress>("download:progress", fn),
+
+  onAgentEvent: (fn: (e: AgentEventView) => void) => on<AgentEventView>("agent:event", fn),
 };
 
 // --- Formátování ----------------------------------------------------------

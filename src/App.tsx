@@ -1,6 +1,7 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { Composer } from "./components/Composer";
+import { Findings } from "./components/Findings";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -8,8 +9,10 @@ import {
   api,
   CommandError,
   events,
+  type AgentEventView,
   type ConversationSummaryView,
   type GenerationStats,
+  type ReviewReportView,
   type ModelView,
   type Role,
   type SessionView,
@@ -30,6 +33,9 @@ export function App() {
   const [generating, setGenerating] = createSignal(false);
   const [stats, setStats] = createSignal<GenerationStats | null>(null);
   const [chyba, setChyba] = createSignal<string | null>(null);
+  const [report, setReport] = createSignal<ReviewReportView | null>(null);
+  /** Co model právě dělá — bez toho je okno minuty prázdné. */
+  const [cinnost, setCinnost] = createSignal<string | null>(null);
   const [nastaveniOtevrena, setNastaveniOtevrena] = createSignal(false);
 
   const unlisteners: Array<() => void> = [];
@@ -69,6 +75,7 @@ export function App() {
       unlisteners.push(
         await events.onGenerationDelta((p) => setStreaming(p.accumulated)),
         await events.onGenerationFinished((s) => setStats(s)),
+        await events.onAgentEvent((e) => setCinnost(popisCinnosti(e))),
       );
     } catch (e) {
       // Bez odběru událostí appka pořád funguje, jen odpověď naskočí naráz
@@ -83,11 +90,26 @@ export function App() {
 
   onCleanup(() => unlisteners.forEach((u) => u()));
 
+  /** Jednořádkový popis toho, co se právě děje. */
+  const popisCinnosti = (e: AgentEventView): string | null => {
+    switch (e.kind) {
+      case "round":
+        return e.round === 1 ? "přemýšlí…" : `kolo ${e.round}…`;
+      case "tool_called":
+        return `${e.name} ${e.summary}`.trim();
+      case "tool_finished":
+        return e.ok ? null : `${e.name} selhal`;
+      case "prose":
+        return null;
+    }
+  };
+
   const odeslat = async (text: string) => {
     setGenerating(true);
     setStreaming("");
     setStats(null);
     setChyba(null);
+    setCinnost(null);
     try {
       setSession(await api.sendMessage(text));
     } catch (e) {
@@ -99,7 +121,31 @@ export function App() {
     } finally {
       setGenerating(false);
       setStreaming("");
+      setCinnost(null);
       // Název se odvozuje z prvního dotazu, takže se seznam musí obnovit.
+      await nacistChaty();
+    }
+  };
+
+  const zkontrolovat = async () => {
+    setGenerating(true);
+    setStreaming("");
+    setStats(null);
+    setChyba(null);
+    setReport(null);
+    setCinnost(null);
+    try {
+      setReport(await api.runReview(null));
+      setSession(await api.getSession());
+    } catch (e) {
+      if (!(e instanceof CommandError && e.cancelled)) {
+        hlasit(e);
+      }
+      setSession(await api.getSession());
+    } finally {
+      setGenerating(false);
+      setStreaming("");
+      setCinnost(null);
       await nacistChaty();
     }
   };
@@ -132,6 +178,7 @@ export function App() {
 
   const novaKonverzace = async () => {
     setStats(null);
+    setReport(null);
     try {
       setSession(await api.newConversation());
       await nacistChaty();
@@ -143,6 +190,7 @@ export function App() {
   const otevrit = async (id: string) => {
     if (generating()) return; // přepnutí uprostřed odpovědi by ji utnulo
     setStats(null);
+    setReport(null);
     try {
       setSession(await api.openConversation(id));
       await nacistChaty();
@@ -269,6 +317,19 @@ export function App() {
         />
 
         <div class="dock">
+          <Show when={report()}>
+            {(r) => <Findings report={r()} onClose={() => setReport(null)} />}
+          </Show>
+
+          <Show when={cinnost()}>
+            {(c) => (
+              <div class="activity">
+                <span class="activity-dot" />
+                {c()}
+              </div>
+            )}
+          </Show>
+
           <Show when={stats()}>
             {(s) => (
               <div class="stats">
@@ -291,6 +352,7 @@ export function App() {
             onSend={odeslat}
             onCancel={zrusit}
             onWorkspaceChange={zmenitSlozku}
+            onReview={zkontrolovat}
           />
         </div>
       </main>

@@ -6,6 +6,11 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use anvil_application::{
+    agent::runner::{AgentEvent, AgentHooks, AgentLoop},
+    review::{workspace_chat_system, ReviewService},
+    TurnContext,
+};
 use anvil_domain::{
     conversation::Conversation,
     error::{DomainError, DomainResult},
@@ -13,10 +18,14 @@ use anvil_domain::{
     id::ConversationId,
     model::{InferenceSettings, ModelId, ModelRole},
     ports::{ChatEngine, DownloadProgress, GenerationProgress, ModelProvisioner, SecretKey},
+    review::Severity,
+    tool::ToolSpec,
     workspace::Workspace,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
+
+use anvil_infrastructure::workspace_fs::LocalWorkspaceFs;
 
 use crate::state::AppState;
 
@@ -136,6 +145,62 @@ pub struct GenerationStats {
     pub cancelled: bool,
     /// Vyplněné, když se před odesláním slučoval kontext.
     pub compacted_messages: Option<usize>,
+}
+
+// --- Agent a review -------------------------------------------------------
+
+/// Co se právě děje ve smyčce. UI z toho staví řádek „čte src/main.rs…“,
+/// aby uživatel nekoukal minuty na prázdné okno.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentEventView {
+    Round { round: u32 },
+    ToolCalled { name: String, summary: String },
+    ToolFinished { name: String, ok: bool },
+    Prose { text: String },
+}
+
+impl From<AgentEvent> for AgentEventView {
+    fn from(e: AgentEvent) -> Self {
+        match e {
+            AgentEvent::RoundStarted { round } => AgentEventView::Round { round },
+            AgentEvent::ToolCalled { name, summary } => {
+                AgentEventView::ToolCalled { name, summary }
+            }
+            AgentEvent::ToolFinished { name, ok } => AgentEventView::ToolFinished { name, ok },
+            AgentEvent::Prose { text } => AgentEventView::Prose { text },
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct FindingView {
+    pub file: String,
+    pub line: Option<u32>,
+    pub severity: String,
+    pub summary: String,
+    pub detail: String,
+    pub location: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewReportView {
+    pub headline: String,
+    pub findings: Vec<FindingView>,
+    pub files_read: Vec<String>,
+    pub rounds: u32,
+    /// Skončilo se na limitu kol, ne proto, že model dokončil práci.
+    pub hit_round_limit: bool,
+    pub summary: String,
+    pub total_ms: u64,
+}
+
+fn severity_key(s: Severity) -> &'static str {
+    match s {
+        Severity::Critical => "critical",
+        Severity::Warning => "warning",
+        Severity::Note => "note",
+    }
 }
 
 // --- Nastavení ------------------------------------------------------------
@@ -568,6 +633,127 @@ pub async fn delete_conversation(
     session_view(&state).await
 }
 
+/// Projde otevřenou složku a vrátí nálezy.
+#[tauri::command]
+pub async fn run_review(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    focus: Option<String>,
+) -> CommandResult<ReviewReportView> {
+    let engine = state.engine().await?;
+    let cancel = state.begin_cancellable().await;
+
+    let (mut conversation, workspace) = {
+        let mut session = state.session.lock().await;
+        if session.generating {
+            return Err(DomainError::validation(
+                "Model právě pracuje. Počkej na dokončení, nebo ho zastav.",
+            )
+            .into());
+        }
+        let Some(ws) = session.workspace.clone() else {
+            return Err(DomainError::validation(
+                "Nejdřív vyber složku projektu — bez ní není co kontrolovat.",
+            )
+            .into());
+        };
+        session.generating = true;
+        (
+            session
+                .conversation
+                .take()
+                .unwrap_or_else(|| Conversation::new("")),
+            ws,
+        )
+    };
+
+    let fs = match LocalWorkspaceFs::new(workspace) {
+        Ok(fs) => Arc::new(fs),
+        Err(e) => {
+            let mut session = state.session.lock().await;
+            session.conversation = Some(conversation);
+            session.generating = false;
+            return Err(e.into());
+        }
+    };
+
+    let hlasic = app.clone();
+    let progress: anvil_domain::ports::ProgressCallback = Arc::new(move |p: GenerationProgress| {
+        let _ = hlasic.emit("generation:delta", &p);
+    });
+
+    let vysledek = ReviewService::new()
+        .run(
+            &mut conversation,
+            &engine,
+            fs,
+            focus.as_deref(),
+            cancel,
+            AgentHooks::events(agent_events(&app)).with_progress(Some(progress)),
+        )
+        .await;
+
+    if let Err(e) = state.conversations.save(&conversation).await {
+        tracing::error!(error = %e, "Konverzaci se nepodarilo ulozit");
+    }
+    {
+        let mut session = state.session.lock().await;
+        session.conversation = Some(conversation);
+        session.generating = false;
+    }
+
+    let out = vysledek?;
+    Ok(ReviewReportView {
+        headline: out.report.headline(),
+        findings: out
+            .report
+            .sorted()
+            .into_iter()
+            .map(|f| FindingView {
+                file: f.file.to_string(),
+                line: f.line,
+                severity: severity_key(f.severity).into(),
+                summary: f.summary.clone(),
+                detail: f.detail.clone(),
+                location: f.location(),
+            })
+            .collect(),
+        files_read: out
+            .report
+            .files_read
+            .iter()
+            .map(|p| p.to_string())
+            .collect(),
+        rounds: out.report.rounds,
+        hit_round_limit: out.report.hit_round_limit,
+        summary: out.summary,
+        total_ms: out.total_ms,
+    })
+}
+
+/// Přeposílá kroky smyčky do UI.
+fn agent_events(app: &AppHandle) -> anvil_application::agent::runner::AgentEventCallback {
+    let app = app.clone();
+    Arc::new(move |e: AgentEvent| {
+        let _ = app.emit("agent:event", AgentEventView::from(e));
+    })
+}
+
+/// Nástroje, které má model při otevřené složce k dispozici — do nápovědy v UI.
+#[tauri::command]
+pub async fn list_tools(state: State<'_, AppState>) -> CommandResult<Vec<String>> {
+    let workspace = state.session.lock().await.workspace.clone();
+    let Some(ws) = workspace else {
+        return Ok(Vec::new());
+    };
+    let fs = Arc::new(LocalWorkspaceFs::new(ws)?);
+    Ok(anvil_application::agent::tools::Toolbox::for_review(fs)
+        .specs()
+        .iter()
+        .map(ToolSpec::prompt_line)
+        .collect())
+}
+
 fn parse_id(raw: &str) -> DomainResult<ConversationId> {
     raw.parse()
         .map_err(|_| DomainError::validation(format!("'{raw}' neni platne ID konverzace")))
@@ -611,18 +797,59 @@ pub async fn send_message(
         let _ = hlasic.emit("generation:delta", &p);
     });
 
-    let vysledek = state
-        .chat
-        .send(
-            &mut conversation,
-            &engine,
-            &text,
-            anvil_application::TurnContext::new(settings.active_role)
-                .with_workspace(workspace.as_ref()),
-            cancel,
-            Some(progress),
-        )
-        .await;
+    // S otevřenou složkou dostane model nástroje a smyčku; bez ní je to
+    // obyčejný chat. Nacpat mu obsah projektu do promptu předem nejde —
+    // při ~27 tokenech za sekundu na zpracování promptu by se na každou
+    // zprávu čekalo minuty.
+    let vysledek = match &workspace {
+        Some(ws) => {
+            let hooks = AgentHooks::events(agent_events(&app)).with_progress(Some(progress));
+            match LocalWorkspaceFs::new(ws.clone()) {
+                Ok(fs) => {
+                    let toolbox =
+                        anvil_application::agent::tools::Toolbox::for_review(Arc::new(fs));
+                    conversation.push(anvil_domain::conversation::Message::user(text.trim()));
+                    conversation.derive_title();
+
+                    AgentLoop::new()
+                        .run(
+                            &mut conversation,
+                            &engine,
+                            &toolbox,
+                            &workspace_chat_system(ws),
+                            cancel,
+                            hooks,
+                        )
+                        .await
+                        .map(|out| anvil_application::SendOutcome {
+                            outcome: anvil_domain::ports::CompletionOutcome {
+                                text: out.text,
+                                prompt_tokens: out.prompt_tokens,
+                                generated_tokens: out.generated_tokens,
+                                time_to_first_token_ms: 0,
+                                total_ms: out.total_ms,
+                                cancelled: false,
+                            },
+                            compacted: None,
+                        })
+                }
+                Err(e) => Err(e),
+            }
+        }
+        None => {
+            state
+                .chat
+                .send(
+                    &mut conversation,
+                    &engine,
+                    &text,
+                    TurnContext::new(settings.active_role),
+                    cancel,
+                    Some(progress),
+                )
+                .await
+        }
+    };
 
     // Ulozit driv, nez se cokoli dalsiho stane, a bez ohledu na to, jak tah
     // dopadl. Castecna odpoved po zruseni i samotny dotaz po chybe jsou pro
