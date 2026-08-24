@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, Show } from "solid-js";
 import { open } from "@tauri-apps/plugin-dialog";
 
 interface Props {
@@ -12,6 +12,11 @@ interface Props {
   onCancel: () => void;
   onWorkspaceChange: (path: string | null) => void;
   onReview: () => void;
+  /**
+   * Text k vložení do pole. Nese se jako objekt schválně: vložit se má
+   * i podruhé stejné znění, a to jde poznat jen podle nové identity.
+   */
+  draft: { text: string } | null;
 }
 
 /**
@@ -63,6 +68,21 @@ export function Composer(props: Props) {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
   };
+
+  createEffect(() => {
+    const d = props.draft;
+    if (!d) return;
+    setText(d.text);
+    // Až po překreslení: dřív by `scrollHeight` odpovídalo starému obsahu
+    // a delší dotaz by zůstal schovaný v jednořádkovém poli.
+    queueMicrotask(() => {
+      if (!area) return;
+      autoResize(area);
+      area.focus();
+      // Kurzor na konec — text je k úpravě, ne k přepsání.
+      area.setSelectionRange(area.value.length, area.value.length);
+    });
+  });
 
   return (
     <div class="composer">

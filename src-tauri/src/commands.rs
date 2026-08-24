@@ -4,7 +4,7 @@
 //! přeloží do tvaru, kterému rozumí UI. Logika patří do `anvil-application`,
 //! kde jde otestovat bez okna.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use anvil_application::{
     agent::runner::{AgentEvent, AgentHooks, AgentLoop},
@@ -15,7 +15,7 @@ use anvil_domain::{
     conversation::Conversation,
     error::{DomainError, DomainResult},
     history,
-    id::ConversationId,
+    id::{ConversationId, MessageId},
     model::{InferenceSettings, ModelId, ModelRole},
     ports::{ChatEngine, DownloadProgress, GenerationProgress, ModelProvisioner, SecretKey},
     review::Severity,
@@ -99,6 +99,9 @@ pub struct ConversationSummaryView {
     pub pinned: bool,
     pub message_count: u32,
     pub updated_at: String,
+    /// Konverzace, ze které tahle vznikla — u větve. Název si UI dohledá
+    /// v tomhle seznamu, takže ho není potřeba posílat zvlášť.
+    pub parent_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,6 +115,9 @@ pub struct SessionView {
     pub workspace_path: Option<String>,
     pub workspace_name: Option<String>,
     pub conversation_title: String,
+    /// Rodič otevřené konverzace, když je to větev — kvůli odkazu zpátky
+    /// do původního vlákna.
+    pub parent_id: Option<String>,
     pub messages: Vec<MessageView>,
     /// Kolik z okna je zabráno viditelnými zprávami — pro ukazatel v UI.
     pub used_tokens: u32,
@@ -530,6 +536,7 @@ pub async fn list_conversations(
                 .updated_at
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap_or_default(),
+            parent_id: c.parent_id.map(|p| p.to_string()),
         })
         .collect())
 }
@@ -631,6 +638,75 @@ pub async fn delete_conversation(
     }
 
     session_view(&state).await
+}
+
+/// Odvětví novou konverzaci od zadané zprávy — **včetně** jí.
+///
+/// „Odsud jinudy": původní vlákno zůstane, jak bylo, a pokračuje se v kopii.
+#[tauri::command]
+pub async fn branch_conversation(
+    state: State<'_, AppState>,
+    message_id: String,
+) -> CommandResult<SessionView> {
+    vetvit(&state, &message_id, true).await
+}
+
+/// Odvětví novou konverzaci **před** zadanou zprávou.
+///
+/// „Zeptat se znovu jinak": zpráva se do větve nezkopíruje, takže vlákno
+/// čeká na nové zadání. Text původní zprávy si do pole doplní UI — má ho
+/// vykreslený, takže ho není potřeba posílat zpátky.
+#[tauri::command]
+pub async fn branch_before_message(
+    state: State<'_, AppState>,
+    message_id: String,
+) -> CommandResult<SessionView> {
+    vetvit(&state, &message_id, false).await
+}
+
+async fn vetvit(
+    state: &State<'_, AppState>,
+    message_id: &str,
+    vcetne: bool,
+) -> CommandResult<SessionView> {
+    let message_id = MessageId::from_str(message_id)
+        .map_err(|_| DomainError::validation(format!("neplatné ID zprávy: {message_id}")))?;
+
+    // Rodič se bere z paměti, ne z databáze: poslední odpověď se ukládá až
+    // po dogenerování a větev by o ni jinak přišla.
+    let rodic = {
+        let session = state.session.lock().await;
+        if session.generating {
+            return Err(
+                DomainError::validation("Model právě odpovídá. Větvit jde až potom.").into(),
+            );
+        }
+        session
+            .conversation
+            .clone()
+            .ok_or_else(|| DomainError::validation("Není otevřená žádná konverzace."))?
+    };
+
+    let mut vetev = if vcetne {
+        rodic.branch_through(message_id)?
+    } else {
+        rodic.branch_before(message_id)?
+    };
+
+    let existujici = state.conversations.list().await?;
+    let nazvy: Vec<String> = existujici.iter().map(|c| c.title.clone()).collect();
+    vetev.title = history::branch_title(&rodic.title, &nazvy);
+    vetev.sort_order = history::order_for_new(&existujici);
+
+    // Rodič se ukládá taky — než se přepne, musí být na disku i to, co se
+    // do něj přidalo od posledního uložení.
+    if let Err(e) = state.conversations.save(&rodic).await {
+        tracing::warn!(error = %e, "Rodice se pred vetvenim nepodarilo ulozit");
+    }
+    state.conversations.save(&vetev).await?;
+
+    state.session.lock().await.conversation = Some(vetev);
+    session_view(state).await
 }
 
 /// Projde otevřenou složku a vrátí nálezy.
@@ -907,6 +983,7 @@ async fn session_view(state: &State<'_, AppState>) -> CommandResult<SessionView>
             .map(|w| w.root().display().to_string()),
         workspace_name: session.workspace.as_ref().map(|w| w.name()),
         conversation_title: c.title.clone(),
+        parent_id: c.branched_from.as_ref().map(|b| b.parent.to_string()),
         messages: c.messages.iter().map(MessageView::from).collect(),
         used_tokens: c.visible_token_estimate(),
         context_tokens: session

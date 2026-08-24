@@ -41,6 +41,8 @@ export interface ConversationSummaryView {
   pinned: boolean;
   messageCount: number;
   updatedAt: string;
+  /** Konverzace, ze které tahle vznikla — u odvětvených vláken. */
+  parentId: string | null;
 }
 
 export interface SessionView {
@@ -51,6 +53,7 @@ export interface SessionView {
   workspacePath: string | null;
   workspaceName: string | null;
   conversationTitle: string;
+  parentId: string | null;
   messages: MessageView[];
   usedTokens: number;
   contextTokens: number;
@@ -203,6 +206,13 @@ export const api = {
     call<void>("pin_conversation", { id, pinned }),
   reorderConversations: (ids: string[]) => call<void>("reorder_conversations", { ids }),
   deleteConversation: (id: string) => call<SessionView>("delete_conversation", { id }),
+  /** Odvětví nové vlákno včetně zvolené zprávy — „odsud jinudy“. */
+  branchConversation: (messageId: string) =>
+    call<SessionView>("branch_conversation", { messageId }),
+  /** Odvětví nové vlákno před zvolenou zprávou — „zeptat se znovu jinak“. */
+  branchBeforeMessage: (messageId: string) =>
+    call<SessionView>("branch_before_message", { messageId }),
+
   sendMessage: (text: string) => call<SessionView>("send_message", { text }),
   cancelGeneration: () => call<boolean>("cancel_generation"),
 

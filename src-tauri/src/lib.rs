@@ -65,6 +65,8 @@ pub fn run() {
             commands::delete_conversation,
             commands::send_message,
             commands::cancel_generation,
+            commands::branch_conversation,
+            commands::branch_before_message,
             commands::run_review,
             commands::list_tools,
         ])

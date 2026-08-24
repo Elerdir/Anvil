@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{id::ConversationId, model::ModelId};
+use crate::{conversation::Conversation, id::ConversationId, model::ModelId};
 
 /// Položka v seznamu konverzací. Nenese zprávy — ty se načtou až při otevření,
 /// aby se při startu nemusela do paměti tahat celá historie.
@@ -28,6 +28,11 @@ pub struct ConversationSummary {
     pub message_count: u32,
     #[serde(default)]
     pub model_id: Option<ModelId>,
+    /// Konverzace, ze které se tahle odvětvila. Seznam ji potřebuje, aby šlo
+    /// u větve ukázat, odkud vznikla — bez toho je v seznamu jen další
+    /// položka s podobným názvem.
+    #[serde(default)]
+    pub parent_id: Option<ConversationId>,
 }
 
 /// Seřadí seznam tak, jak se má zobrazit: připnuté nahoře, uvnitř skupin
@@ -57,6 +62,75 @@ pub fn order_for_new(existing: &[ConversationSummary]) -> i64 {
         .unwrap_or(0)
 }
 
+/// Přípona, kterou se v názvu pozná odvětvené vlákno.
+const VETEV: &str = "větev";
+
+/// Název pro nově odvětvené vlákno.
+///
+/// Číslovat je potřeba proto, že z jednoho místa se větví opakovaně — bez
+/// čísla by v seznamu stálo několik položek se stejným názvem a uživatel by
+/// je od sebe nerozeznal. Číslo se hledá podle **skutečně obsazených** názvů,
+/// ne podle počtu větví, aby se smazáním jedné z nich neuvolnilo číslo, které
+/// už nikdo nečeká.
+///
+/// Větvení větve nepřidává druhou příponu: z `Downloader (větev 2)` vznikne
+/// `Downloader (větev 3)`, ne `Downloader (větev 2) (větev)`.
+pub fn branch_title(parent_title: &str, existing: &[String]) -> String {
+    let zaklad = strip_branch_suffix(parent_title.trim());
+    let zaklad = if zaklad.is_empty() {
+        "Konverzace"
+    } else {
+        zaklad
+    };
+    // Aby se název i s příponou vešel do stejné meze jako všechny ostatní.
+    let zaklad = zkratit(
+        zaklad,
+        Conversation::TITLE_MAX_CHARS.saturating_sub(" (větev 99)".chars().count()),
+    );
+
+    let obsazene: Vec<&str> = existing.iter().map(|t| t.trim()).collect();
+    for n in 1..=99 {
+        let navrh = if n == 1 {
+            format!("{zaklad} ({VETEV})")
+        } else {
+            format!("{zaklad} ({VETEV} {n})")
+        };
+        if !obsazene.contains(&navrh.as_str()) {
+            return navrh;
+        }
+    }
+    // Sto větví z jednoho místa je hypotéza, ne případ k ošetření — ale
+    // vracet prázdný název by bylo horší než připustit duplicitu.
+    format!("{zaklad} ({VETEV})")
+}
+
+/// Odřízne z názvu `(větev)` nebo `(větev N)` na konci.
+fn strip_branch_suffix(title: &str) -> &str {
+    let Some(zbytek) = title.strip_suffix(')') else {
+        return title;
+    };
+    let Some(zacatek) = zbytek.rfind('(') else {
+        return title;
+    };
+    let uvnitr = zbytek[zacatek + 1..].trim();
+    let je_vetev = uvnitr == VETEV
+        || uvnitr
+            .strip_prefix(VETEV)
+            .is_some_and(|n| n.trim().parse::<u32>().is_ok());
+    if je_vetev {
+        zbytek[..zacatek].trim_end()
+    } else {
+        title
+    }
+}
+
+fn zkratit(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    text.chars().take(max).collect::<String>().trim_end().into()
+}
+
 /// Přepočítá `sort_order` podle zadaného pořadí ID.
 ///
 /// Vrací dvojice `(id, nové pořadí)`. ID, která v seznamu nejsou, si své
@@ -81,6 +155,7 @@ mod tests {
             updated_at: OffsetDateTime::now_utc(),
             message_count: 2,
             model_id: None,
+            parent_id: None,
         }
     }
 
@@ -168,6 +243,82 @@ mod tests {
         sort_for_display(&mut v);
 
         assert_eq!(v.iter().map(|c| c.id).collect::<Vec<_>>(), chtene);
+    }
+
+    // --- názvy větví -----------------------------------------------------
+
+    #[test]
+    fn prvni_vetev_dostane_priponu_bez_cisla() {
+        assert_eq!(branch_title("Downloader", &[]), "Downloader (větev)");
+    }
+
+    #[test]
+    fn dalsi_vetve_se_cisluji_od_dvojky() {
+        let obsazene = vec!["Downloader (větev)".to_string()];
+        assert_eq!(
+            branch_title("Downloader", &obsazene),
+            "Downloader (větev 2)"
+        );
+
+        let obsazene = vec![
+            "Downloader (větev)".to_string(),
+            "Downloader (větev 2)".to_string(),
+        ];
+        assert_eq!(
+            branch_title("Downloader", &obsazene),
+            "Downloader (větev 3)"
+        );
+    }
+
+    #[test]
+    fn uvolnene_cislo_se_znovu_pouzije() {
+        // Prostřední větev někdo smazal — nová má sednout do díry, ne
+        // pokračovat za poslední.
+        let obsazene = vec![
+            "Downloader (větev)".to_string(),
+            "Downloader (větev 3)".to_string(),
+        ];
+        assert_eq!(
+            branch_title("Downloader", &obsazene),
+            "Downloader (větev 2)"
+        );
+    }
+
+    #[test]
+    fn vetveni_vetve_nepridava_druhou_priponu() {
+        assert_eq!(
+            branch_title("Downloader (větev 2)", &[]),
+            "Downloader (větev)"
+        );
+        assert_eq!(
+            branch_title("Downloader (větev)", &[]),
+            "Downloader (větev)"
+        );
+    }
+
+    #[test]
+    fn zavorka_ktera_neni_vetev_zustane_v_nazvu() {
+        assert_eq!(
+            branch_title("Oprava CI (podruhé)", &[]),
+            "Oprava CI (podruhé) (větev)"
+        );
+    }
+
+    #[test]
+    fn nazev_vetve_se_vejde_do_meze() {
+        let dlouhy = "a".repeat(200);
+        let nazev = branch_title(&dlouhy, &[]);
+        assert!(
+            nazev.chars().count() <= Conversation::TITLE_MAX_CHARS,
+            "název větve má {} znaků",
+            nazev.chars().count()
+        );
+        assert!(nazev.ends_with("(větev)"));
+    }
+
+    #[test]
+    fn prazdny_nazev_rodice_neudela_prazdnou_vetev() {
+        assert_eq!(branch_title("   ", &[]), "Konverzace (větev)");
     }
 
     #[test]
