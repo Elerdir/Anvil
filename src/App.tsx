@@ -36,6 +36,8 @@ export function App() {
   const [report, setReport] = createSignal<ReviewReportView | null>(null);
   /** Co model právě dělá — bez toho je okno minuty prázdné. */
   const [cinnost, setCinnost] = createSignal<string | null>(null);
+  /** Text, který se má vložit do pole pro dotaz. Viz `zeptatZnovu`. */
+  const [predvyplnit, setPredvyplnit] = createSignal<{ text: string } | null>(null);
   const [nastaveniOtevrena, setNastaveniOtevrena] = createSignal(false);
 
   const unlisteners: Array<() => void> = [];
@@ -232,6 +234,33 @@ export function App() {
     }
   };
 
+  const vetvit = async (messageId: string) => {
+    if (generating()) return;
+    setStats(null);
+    setReport(null);
+    try {
+      setSession(await api.branchConversation(messageId));
+      await nacistChaty();
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
+  const zeptatZnovu = async (messageId: string, text: string) => {
+    if (generating()) return;
+    setStats(null);
+    setReport(null);
+    try {
+      setSession(await api.branchBeforeMessage(messageId));
+      await nacistChaty();
+      // Původní znění se nabídne k úpravě — o to při „zeptat se znovu“ jde.
+      // Nový objekt pokaždé, aby se vložení spustilo i pro stejný text.
+      setPredvyplnit({ text });
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
   const smazat = async (id: string) => {
     try {
       setSession(await api.deleteConversation(id));
@@ -239,6 +268,12 @@ export function App() {
     } catch (e) {
       hlasit(e);
     }
+  };
+
+  /** Rodič otevřené konverzace. `undefined`, když ho už někdo smazal. */
+  const rodicOtevrene = () => {
+    const parent = session()?.parentId;
+    return parent ? chats().find((c) => c.id === parent) : undefined;
   };
 
   const modelNazev = () => {
@@ -290,6 +325,21 @@ export function App() {
             řádky a `1fr` by dostalo pole pro dotaz místo konverzace —
             přesně to dělalo, že pole viselo uprostřed okna. */}
         <div class="notices">
+          {/* Bez odkazu zpátky je větev slepá ulička: uživatel vidí zkrácenou
+              historii a nemá jak se dostat k vláknu, ze kterého vznikla. */}
+          <Show when={rodicOtevrene()}>
+            {(p) => (
+              <div class="banner banner-branch">
+                <span>
+                  Odvětveno z <strong>{p().title}</strong>
+                </span>
+                <button class="ghost" onClick={() => otevrit(p().id)}>
+                  Zpátky do původního vlákna
+                </button>
+              </div>
+            )}
+          </Show>
+
           <Show when={session() && !session()!.engineAvailable}>
             <div class="banner">
               Tenhle build je bez enginu llama.cpp — model se nenačte. Spusť appku přes{" "}
@@ -314,6 +364,8 @@ export function App() {
           streaming={streaming()}
           generating={generating()}
           hasSummary={session()?.hasSummary ?? false}
+          onBranch={vetvit}
+          onAskAgain={zeptatZnovu}
         />
 
         <div class="dock">
@@ -353,6 +405,7 @@ export function App() {
             onCancel={zrusit}
             onWorkspaceChange={zmenitSlozku}
             onReview={zkontrolovat}
+            draft={predvyplnit()}
           />
         </div>
       </main>

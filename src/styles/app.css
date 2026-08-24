@@ -290,6 +290,57 @@
   border-color: var(--border-strong);
 }
 
+/* Akce u zprávy se ukazují až při najetí myší. Natrvalo viditelná tlačítka
+   u každé zprávy by z konverzace udělala lištu ovládacích prvků. Místo si
+   ale drží pořád, jinak by se text při najetí posouval. */
+.msg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  height: 22px;
+  margin-top: 4px;
+}
+
+.msg-action {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-faint);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.msg:hover .msg-action {
+  opacity: 1;
+}
+
+.msg-action:hover:not(:disabled) {
+  color: var(--hot-bright);
+  border-color: var(--border-strong);
+  background: var(--bg-raised);
+}
+
+/* Při generování nemá smysl větvit, ale tlačítko nemá zmizet — jen ztuhnout,
+   aby se pod kurzorem nepřeskládal obsah. */
+.msg-action:disabled {
+  cursor: default;
+  opacity: 0;
+}
+
+.chat-branch-mark {
+  color: var(--text-faint);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.banner-branch {
+  background: var(--bg-raised);
+  color: var(--text-muted);
+}
+
 .msg-text {
   margin: 0 0 8px;
   white-space: pre-wrap;

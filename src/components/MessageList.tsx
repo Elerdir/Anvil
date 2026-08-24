@@ -8,6 +8,10 @@ interface Props {
   streaming: string;
   generating: boolean;
   hasSummary: boolean;
+  /** Odvětvit nové vlákno včetně téhle zprávy. */
+  onBranch: (messageId: string) => void;
+  /** Odvětvit nové vlákno před touhle zprávou a její text nabídnout k úpravě. */
+  onAskAgain: (messageId: string, text: string) => void;
 }
 
 /**
@@ -107,6 +111,33 @@ export function MessageList(props: Props) {
               <Body content={m.content} />
               <Show when={m.tokenCount}>
                 <div class="msg-meta">{m.tokenCount} tokenů</div>
+              </Show>
+            </div>
+
+            {/* Akce se ukazují až při najetí myší: u každé zprávy visí
+                natrvalo dvě tlačítka, což by z konverzace udělalo lištu. */}
+            <div class="msg-actions">
+              <Show
+                when={m.role === "user"}
+                fallback={
+                  <button
+                    class="msg-action"
+                    disabled={props.generating}
+                    title="Založit nové vlákno, které pokračuje od téhle odpovědi"
+                    onClick={() => props.onBranch(m.id)}
+                  >
+                    ⑂ Větvit odsud
+                  </button>
+                }
+              >
+                <button
+                  class="msg-action"
+                  disabled={props.generating}
+                  title="Založit nové vlákno a tenhle dotaz položit jinak"
+                  onClick={() => props.onAskAgain(m.id, m.content)}
+                >
+                  ⑂ Zeptat se znovu
+                </button>
               </Show>
             </div>
           </div>

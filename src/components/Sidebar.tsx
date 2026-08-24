@@ -44,6 +44,16 @@ export function Sidebar(props: Props) {
     props.onReorder(poradi);
   };
 
+  /**
+   * Název rodiče pro popisek u větve.
+   *
+   * Rodič se mohl smazat — větev tím nezaniká, jen se ztratí, odkud vznikla.
+   * V tom případě se značka neukáže vůbec, protože „odvětveno z ???“ nikomu
+   * nepomůže.
+   */
+  const rodic = (c: ConversationSummaryView) =>
+    c.parentId ? props.conversations.find((p) => p.id === c.parentId) : undefined;
+
   const zacitPrejmenovat = (c: ConversationSummaryView) => {
     setEditing(c.id);
     setDraft(c.title);
@@ -106,6 +116,14 @@ export function Sidebar(props: Props) {
                 <span class="chat-pin-mark" title="Připnuto">
                   ▪
                 </span>
+              </Show>
+
+              <Show when={rodic(c)}>
+                {(p) => (
+                  <span class="chat-branch-mark" title={`Odvětveno z „${p().title}“`}>
+                    ⑂
+                  </span>
+                )}
               </Show>
 
               <Show
