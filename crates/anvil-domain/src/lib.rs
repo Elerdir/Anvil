@@ -14,6 +14,7 @@ pub mod history;
 pub mod id;
 pub mod model;
 pub mod ports;
+pub mod review;
 pub mod settings;
 pub mod tool;
 pub mod workspace;
@@ -25,6 +26,7 @@ pub use id::{ConversationId, MessageId};
 pub use model::{
     ChatTemplateKind, InferenceSettings, InstalledModel, ModelId, ModelRole, ModelSpec, Sampling,
 };
+pub use review::{Finding, ReviewReport, Severity};
 pub use settings::{AppSettings, RoleModels};
 pub use tool::{ParamKind, ToolCall, ToolParam, ToolResult, ToolSpec};
 pub use workspace::{RelativePath, Workspace};
