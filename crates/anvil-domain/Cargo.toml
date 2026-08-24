@@ -1,0 +1,23 @@
+[package]
+name = "anvil-domain"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Doménové jádro Anvilu — entity, hodnotové objekty a porty. Bez I/O."
+
+[dependencies]
+# Doména nesmí sáhnout na I/O. Proto tu není tokio, reqwest, sqlx ani std::fs
+# používané k práci se souborovým systémem — jen typy, čas a serializace.
+# `async-trait` a `tokio-util` jsou výjimka: porty popisují asynchronní
+# operace a jejich zrušení, ale samy nic neprovádějí.
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

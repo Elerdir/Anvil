@@ -1,0 +1,535 @@
+//! Tauri příkazy — jediné místo, kde se frontend potkává s aplikační vrstvou.
+//!
+//! Příkazy samy nic nepočítají: převedou vstup, zavolají službu a výsledek
+//! přeloží do tvaru, kterému rozumí UI. Logika patří do `anvil-application`,
+//! kde jde otestovat bez okna.
+
+use std::{path::PathBuf, sync::Arc};
+
+use anvil_domain::{
+    conversation::Conversation,
+    error::{DomainError, DomainResult},
+    model::{InferenceSettings, ModelId, ModelRole},
+    ports::{ChatEngine, DownloadProgress, GenerationProgress, ModelProvisioner, SecretKey},
+    workspace::Workspace,
+};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
+
+use crate::state::AppState;
+
+// --- Chyby ----------------------------------------------------------------
+
+/// Chyba ve tvaru, kterému rozumí frontend.
+#[derive(Debug, Serialize)]
+pub struct CommandError {
+    pub message: String,
+    /// Zrušení uživatelem — UI ho nemá hlásit jako chybu.
+    pub cancelled: bool,
+}
+
+impl From<DomainError> for CommandError {
+    fn from(e: DomainError) -> Self {
+        Self {
+            cancelled: e.is_cancelled(),
+            message: e.to_string(),
+        }
+    }
+}
+
+type CommandResult<T> = Result<T, CommandError>;
+
+// --- Pohledy pro UI -------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ModelView {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub role: String,
+    pub size_bytes: u64,
+    pub recommended: bool,
+    pub installed: bool,
+    pub gated: bool,
+    pub active_params_b: f32,
+    pub total_params_b: f32,
+    pub native_context_tokens: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MessageView {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub token_count: Option<u32>,
+}
+
+impl From<&anvil_domain::conversation::Message> for MessageView {
+    fn from(m: &anvil_domain::conversation::Message) -> Self {
+        Self {
+            id: m.id.to_string(),
+            role: match m.role {
+                anvil_domain::conversation::Role::User => "user",
+                anvil_domain::conversation::Role::Assistant => "assistant",
+                anvil_domain::conversation::Role::Tool => "tool",
+                anvil_domain::conversation::Role::System => "system",
+            }
+            .into(),
+            content: m.content.clone(),
+            token_count: m.token_count,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionView {
+    pub loaded_model: Option<String>,
+    pub plan_description: Option<String>,
+    pub workspace_path: Option<String>,
+    pub workspace_name: Option<String>,
+    pub conversation_title: String,
+    pub messages: Vec<MessageView>,
+    /// Kolik z okna je zabráno viditelnými zprávami — pro ukazatel v UI.
+    pub used_tokens: u32,
+    pub context_tokens: u32,
+    pub has_summary: bool,
+    /// Build umí načíst model. Bez toho appka jede, ale jen jako prohlížeč.
+    pub engine_available: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SettingsView {
+    pub models_directory: Option<String>,
+    pub default_models_directory: String,
+    pub coding_model: Option<String>,
+    pub conversational_model: Option<String>,
+    pub active_role: String,
+    pub context_tokens: u32,
+    pub use_gpu: bool,
+    pub setup_completed: bool,
+    pub has_hf_token: bool,
+    pub last_workspace: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GenerationStats {
+    pub prompt_tokens: u32,
+    pub generated_tokens: u32,
+    pub time_to_first_token_ms: u64,
+    pub total_ms: u64,
+    pub tokens_per_second: f64,
+    pub cancelled: bool,
+    /// Vyplněné, když se před odesláním slučoval kontext.
+    pub compacted_messages: Option<usize>,
+}
+
+// --- Nastavení ------------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> CommandResult<SettingsView> {
+    let s = state.settings().await?;
+    Ok(SettingsView {
+        models_directory: s.models_directory.as_ref().map(|p| p.display().to_string()),
+        default_models_directory: anvil_infrastructure::paths::default_models_dir()
+            .display()
+            .to_string(),
+        coding_model: s.models.coding.as_ref().map(ModelId::to_string),
+        conversational_model: s.models.conversational.as_ref().map(ModelId::to_string),
+        active_role: role_key(s.active_role).into(),
+        context_tokens: s.inference.context_tokens,
+        use_gpu: s.inference.use_gpu,
+        setup_completed: s.setup_completed,
+        has_hf_token: state
+            .secrets
+            .get(SecretKey::HuggingFace)
+            .ok()
+            .flatten()
+            .is_some(),
+        last_workspace: s.last_workspace.as_ref().map(|p| p.display().to_string()),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SettingsPatch {
+    pub models_directory: Option<String>,
+    pub coding_model: Option<String>,
+    pub conversational_model: Option<String>,
+    pub active_role: Option<String>,
+    pub context_tokens: Option<u32>,
+    pub use_gpu: Option<bool>,
+    pub setup_completed: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn save_settings(
+    state: State<'_, AppState>,
+    patch: SettingsPatch,
+) -> CommandResult<SettingsView> {
+    // Modely se ověří proti katalogu dřív, než se cokoli uloží — neplatné ID
+    // v nastavení by se projevilo až při příštím startu.
+    let coding = parse_model(&state, patch.coding_model.as_deref())?;
+    let conversational = parse_model(&state, patch.conversational_model.as_deref())?;
+
+    state
+        .update_settings(|mut s| {
+            if let Some(dir) = &patch.models_directory {
+                s = s.with_models_directory(Some(PathBuf::from(dir)));
+            }
+            if patch.coding_model.is_some() {
+                s = s.with_model(ModelRole::Coding, coding.clone());
+            }
+            if patch.conversational_model.is_some() {
+                s = s.with_model(ModelRole::Conversational, conversational.clone());
+            }
+            if let Some(role) = patch.active_role.as_deref().and_then(parse_role) {
+                s = s.with_active_role(role);
+            }
+            let mut inference = s.inference;
+            if let Some(ctx) = patch.context_tokens {
+                inference = inference.with_context(ctx);
+            }
+            if let Some(gpu) = patch.use_gpu {
+                inference = inference.with_gpu(gpu);
+            }
+            s = s.with_inference(inference);
+            if let Some(done) = patch.setup_completed {
+                s = s.with_setup_completed(done);
+            }
+            s
+        })
+        .await?;
+
+    get_settings(state).await
+}
+
+fn parse_model(state: &State<'_, AppState>, raw: Option<&str>) -> DomainResult<Option<ModelId>> {
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let id = ModelId::parse(raw)?;
+    state.find_spec(&id)?;
+    Ok(Some(id))
+}
+
+fn parse_role(raw: &str) -> Option<ModelRole> {
+    match raw {
+        "coding" => Some(ModelRole::Coding),
+        "conversational" => Some(ModelRole::Conversational),
+        _ => None,
+    }
+}
+
+fn role_key(role: ModelRole) -> &'static str {
+    match role {
+        ModelRole::Coding => "coding",
+        ModelRole::Conversational => "conversational",
+    }
+}
+
+// --- Token HuggingFace ----------------------------------------------------
+
+/// Ověří token a teprve po úspěchu ho uloží. Uložit ho hned by znamenalo,
+/// že se uživatel o překlepu dozví až v okamžiku, kdy mu selže stahování.
+#[tauri::command]
+pub async fn save_hf_token(state: State<'_, AppState>, token: String) -> CommandResult<String> {
+    let jmeno = state.validator.validate_huggingface(&token).await?;
+    state.secrets.set(SecretKey::HuggingFace, token.trim())?;
+    tracing::info!(user = %jmeno, "Token HuggingFace ověřen a uložen");
+    Ok(jmeno)
+}
+
+#[tauri::command]
+pub async fn clear_hf_token(state: State<'_, AppState>) -> CommandResult<()> {
+    state.secrets.delete(SecretKey::HuggingFace)?;
+    Ok(())
+}
+
+// --- Modely ---------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_models(state: State<'_, AppState>) -> CommandResult<Vec<ModelView>> {
+    let nainstalovane = state.installed_models().await?;
+    Ok(state
+        .catalog
+        .all()
+        .into_iter()
+        .map(|m| ModelView {
+            installed: nainstalovane.iter().any(|i| i.id == m.id),
+            id: m.id.to_string(),
+            name: m.name,
+            description: m.description,
+            role: role_key(m.role).into(),
+            size_bytes: m.size_bytes,
+            recommended: m.recommended,
+            gated: m.gated,
+            active_params_b: m.active_params_b,
+            total_params_b: m.total_params_b,
+            native_context_tokens: m.native_context_tokens,
+        })
+        .collect())
+}
+
+/// Postará se, aby model byl na disku — najde, zkopíruje nebo stáhne.
+/// Průběh chodí událostí `download:progress`.
+#[tauri::command]
+pub async fn ensure_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+) -> CommandResult<String> {
+    let spec = state.find_spec(&ModelId::parse(model_id)?)?;
+    let provisioner = state.provisioner().await?;
+    let cancel = state.begin_cancellable().await;
+
+    let hlasic = app.clone();
+    let progress: anvil_domain::ports::DownloadCallback = Arc::new(move |p: DownloadProgress| {
+        let _ = hlasic.emit("download:progress", &p);
+    });
+
+    let model = provisioner
+        .ensure(&spec, cancel, Some(progress))
+        .await
+        .map_err(CommandError::from)?;
+
+    Ok(model.path.display().to_string())
+}
+
+/// Načte model do paměti. Trvá desítky sekund, proto běží mimo hlavní vlákno.
+#[tauri::command]
+pub async fn load_model(
+    state: State<'_, AppState>,
+    model_id: String,
+) -> CommandResult<SessionView> {
+    let spec = state.find_spec(&ModelId::parse(model_id)?)?;
+    let settings = state.settings().await?;
+
+    let nainstalovane = state.installed_models().await?;
+    let na_disku = nainstalovane
+        .into_iter()
+        .find(|m| m.id == spec.id)
+        .ok_or_else(|| {
+            DomainError::not_found(format!(
+                "model {} není na disku — nejdřív ho stáhni",
+                spec.name
+            ))
+        })?;
+
+    // Starý model se pustí dřív, než se načte nový — dva se do VRAM nevejdou.
+    {
+        let mut session = state.session.lock().await;
+        session.engine = None;
+        session.loaded_model = None;
+        session.plan_description = None;
+    }
+
+    let (engine, plan) = build_engine(spec.clone(), na_disku.path, settings.inference).await?;
+
+    {
+        let mut session = state.session.lock().await;
+        session.engine = Some(engine);
+        session.loaded_model = Some(spec.id.clone());
+        session.plan_description = plan;
+        if session.conversation.is_none() {
+            session.conversation = Some(Conversation::new(""));
+        }
+    }
+
+    session_view(&state).await
+}
+
+#[cfg(feature = "engine")]
+async fn build_engine(
+    spec: anvil_domain::model::ModelSpec,
+    path: PathBuf,
+    inference: InferenceSettings,
+) -> DomainResult<(Arc<dyn ChatEngine>, Option<String>)> {
+    use anvil_infrastructure::ai::llama_engine::LlamaChatEngine;
+
+    tokio::task::spawn_blocking(move || {
+        let engine = LlamaChatEngine::load(spec.id, &path, spec.template, inference)?;
+        let plan = engine.plan_description().to_string();
+        Ok::<_, DomainError>((Arc::new(engine) as Arc<dyn ChatEngine>, Some(plan)))
+    })
+    .await
+    .map_err(|e| DomainError::model(format!("načítání modelu selhalo: {e}")))?
+}
+
+#[cfg(not(feature = "engine"))]
+async fn build_engine(
+    _spec: anvil_domain::model::ModelSpec,
+    _path: PathBuf,
+    _inference: InferenceSettings,
+) -> DomainResult<(Arc<dyn ChatEngine>, Option<String>)> {
+    Err(DomainError::model(
+        "Tenhle build je bez enginu llama.cpp. Spusť aplikaci přes \
+         scripts\\dev-vulkan.bat (Windows) nebo scripts/dev-metal.sh (macOS).",
+    ))
+}
+
+#[tauri::command]
+pub async fn unload_model(state: State<'_, AppState>) -> CommandResult<SessionView> {
+    {
+        let mut session = state.session.lock().await;
+        session.engine = None;
+        session.loaded_model = None;
+        session.plan_description = None;
+    }
+    session_view(&state).await
+}
+
+// --- Workspace ------------------------------------------------------------
+
+#[tauri::command]
+pub async fn set_workspace(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> CommandResult<SessionView> {
+    let workspace = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => {
+            let cesta = PathBuf::from(p);
+            if !cesta.is_dir() {
+                return Err(DomainError::validation(format!(
+                    "{} není složka nebo neexistuje",
+                    cesta.display()
+                ))
+                .into());
+            }
+            // Kanonizace srovná `..`, krátké názvy i velikost písmen —
+            // bez ní by se hlídání hranic workspace dalo obejít.
+            let cesta = std::fs::canonicalize(&cesta).unwrap_or(cesta);
+            Some(Workspace::new(cesta)?)
+        }
+        None => None,
+    };
+
+    let ulozit = workspace.as_ref().map(|w| w.root().to_path_buf());
+    state
+        .update_settings(|s| s.with_last_workspace(ulozit.clone()))
+        .await?;
+
+    state.session.lock().await.workspace = workspace;
+    session_view(&state).await
+}
+
+// --- Konverzace -----------------------------------------------------------
+
+#[tauri::command]
+pub async fn get_session(state: State<'_, AppState>) -> CommandResult<SessionView> {
+    session_view(&state).await
+}
+
+#[tauri::command]
+pub async fn new_conversation(state: State<'_, AppState>) -> CommandResult<SessionView> {
+    state.session.lock().await.conversation = Some(Conversation::new(""));
+    session_view(&state).await
+}
+
+/// Odešle dotaz. Tokeny chodí událostí `generation:delta`, výsledné
+/// statistiky přes `generation:finished`.
+#[tauri::command]
+pub async fn send_message(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    text: String,
+) -> CommandResult<SessionView> {
+    let engine = state.engine().await?;
+    let settings = state.settings().await?;
+    let cancel = state.begin_cancellable().await;
+
+    // Konverzace se na dobu generování vyjme ze session, aby se nemusel držet
+    // zámek přes celý (dlouhý) běh modelu. Druhé odeslání se proto musí
+    // odmítnout — jinak by si obě konverzaci vyjmula a na konci přepsala.
+    let (mut conversation, workspace) = {
+        let mut session = state.session.lock().await;
+        if session.generating {
+            return Err(DomainError::validation(
+                "Model právě odpovídá. Počkej na dokončení, nebo generování zastav.",
+            )
+            .into());
+        }
+        session.generating = true;
+        (
+            session
+                .conversation
+                .take()
+                .unwrap_or_else(|| Conversation::new("")),
+            session.workspace.clone(),
+        )
+    };
+
+    let hlasic = app.clone();
+    let progress: anvil_domain::ports::ProgressCallback = Arc::new(move |p: GenerationProgress| {
+        let _ = hlasic.emit("generation:delta", &p);
+    });
+
+    let vysledek = state
+        .chat
+        .send(
+            &mut conversation,
+            &engine,
+            &text,
+            anvil_application::TurnContext::new(settings.active_role)
+                .with_workspace(workspace.as_ref()),
+            cancel,
+            Some(progress),
+        )
+        .await;
+
+    // Konverzaci vrátit zpátky ať to dopadlo jakkoli — jinak by se po chybě
+    // ztratila celá historie.
+    {
+        let mut session = state.session.lock().await;
+        session.conversation = Some(conversation);
+        session.generating = false;
+    }
+
+    match vysledek {
+        Ok(out) => {
+            let stats = GenerationStats {
+                prompt_tokens: out.outcome.prompt_tokens,
+                generated_tokens: out.outcome.generated_tokens,
+                time_to_first_token_ms: out.outcome.time_to_first_token_ms,
+                total_ms: out.outcome.total_ms,
+                tokens_per_second: out.outcome.decode_tokens_per_second(),
+                cancelled: out.outcome.cancelled,
+                compacted_messages: out.compacted.map(|c| c.message_count),
+            };
+            let _ = app.emit("generation:finished", &stats);
+            session_view(&state).await
+        }
+        Err(e) => Err(e.into()),
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_generation(state: State<'_, AppState>) -> CommandResult<bool> {
+    Ok(state.cancel_running().await)
+}
+
+// --- Společné -------------------------------------------------------------
+
+async fn session_view(state: &State<'_, AppState>) -> CommandResult<SessionView> {
+    let session = state.session.lock().await;
+    let prazdna = Conversation::new("");
+    let c = session.conversation.as_ref().unwrap_or(&prazdna);
+
+    Ok(SessionView {
+        loaded_model: session.loaded_model.as_ref().map(ModelId::to_string),
+        plan_description: session.plan_description.clone(),
+        workspace_path: session
+            .workspace
+            .as_ref()
+            .map(|w| w.root().display().to_string()),
+        workspace_name: session.workspace.as_ref().map(|w| w.name()),
+        conversation_title: c.title.clone(),
+        messages: c.messages.iter().map(MessageView::from).collect(),
+        used_tokens: c.visible_token_estimate(),
+        context_tokens: session
+            .engine
+            .as_ref()
+            .map(|e| e.context_tokens())
+            .unwrap_or(0),
+        has_summary: c.summary.is_some(),
+        engine_available: cfg!(feature = "engine"),
+    })
+}

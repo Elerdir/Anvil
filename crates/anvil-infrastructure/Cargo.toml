@@ -1,0 +1,59 @@
+[package]
+name = "anvil-infrastructure"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Infrastruktura Anvilu — llama.cpp, HuggingFace, systémový keychain, disk."
+
+[features]
+default = []
+
+# Sestaví llama.cpp. Bez téhle feature se přeloží a otestuje všechno ostatní
+# — plánovač offloadu, parser GGUF, downloader i šablony promptů — a to bez
+# CMake, Vulkan SDK a bez pětiminutového buildu. Testy, které se kvůli
+# nárokům prostředí nepouštějí, nikoho nechrání.
+engine = ["dep:llama-cpp-2", "dep:encoding_rs"]
+
+# GPU backend. CUDA tu záměrně není: rozhodující pro modely větší než VRAM
+# není backend, ale rozložení modelu (viz `ai::offload_plan`), a Vulkan
+# pokrývá NVIDII, AMD i Intel jedním SDK.
+engine-vulkan = ["engine", "llama-cpp-2/vulkan"]
+# macOS (Apple Silicon i Intel) — Metal je součást systému, nic se neinstaluje.
+engine-metal = ["engine", "llama-cpp-2/metal"]
+
+[dependencies]
+anvil-domain = { workspace = true }
+anvil-application = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+time = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+keyring = { workspace = true }
+directories = { workspace = true }
+
+# Lokální LLM. `openmp` MUSÍ zůstat zapnutý: bez něj si ggml řídí vlákna samo
+# a při každém přechodu mezi CPU a GPU v grafu budí threadpool znovu. U
+# hybridního MoE běhu je takových přechodů přes šedesát na jediný token,
+# takže se ta režie platí pořád dokola — naměřeno 8,4 tok/s bez OpenMP proti
+# 20,7 s ním. `default-features = false` ho tiše vypne, proto je vypsaný.
+llama-cpp-2 = { version = "0.1.151", default-features = false, features = [
+    "sampler",
+    "openmp",
+], optional = true }
+encoding_rs = { version = "0.8", optional = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true }

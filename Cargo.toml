@@ -1,0 +1,91 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/anvil-domain",
+    "crates/anvil-application",
+    "crates/anvil-infrastructure",
+]
+# Generátor ikon je samostatný — nemá co zdržovat `cargo build` ani `cargo test`.
+exclude = ["tools/iconforge"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Anvil"]
+license = "MIT"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anvil-domain = { path = "crates/anvil-domain" }
+anvil-application = { path = "crates/anvil-application" }
+anvil-infrastructure = { path = "crates/anvil-infrastructure" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+futures-util = "0.3"
+
+# Serializace
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Chyby
+thiserror = "2"
+anyhow = "1"
+
+# Identifikátory & čas
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = [
+    "serde",
+    "serde-well-known",
+    "formatting",
+    "parsing",
+    "macros",
+] }
+
+# Logování
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP klient pro stahování modelů z HuggingFace
+reqwest = { version = "0.12", features = ["json", "stream"] }
+sha2 = "0.10"
+
+# Úložiště
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "sqlite",
+    "macros",
+    "time",
+    "uuid",
+    "migrate",
+] }
+
+# Tajemství v systémovém úložišti — Credential Manager na Windows,
+# Keychain na macOS. Nahrazuje DPAPI, které je jen windowsové.
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
+
+# Adresáře podle konvence platformy (%APPDATA% vs ~/Library/Application Support)
+directories = "5"
+
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+
+# Testy
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# llama.cpp se přes `cc`/`cmake` staví i v dev profilu; bez optimalizace
+# závislostí by byl debug běh modelu nepoužitelně pomalý.
+[profile.dev.package."*"]
+opt-level = 3

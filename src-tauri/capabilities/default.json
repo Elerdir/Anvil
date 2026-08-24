@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Oprávnění hlavního okna Anvilu. Držet co nejužší — dialog na výběr složky a otevření cesty ve správci souborů je všechno, co UI potřebuje.",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open", "opener:allow-reveal-item-in-dir"]
+}

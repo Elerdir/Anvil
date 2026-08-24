@@ -1,0 +1,170 @@
+/* Paleta Anvilu.
+ *
+ * Musí zůstat v souladu s tools/iconforge/src/main.rs — ikona je ze stejných
+ * barev a při změně palety se generuje znovu (`pnpm icons`). */
+
+:root {
+  /* Podklad — stejná barva jako pozadí ikony */
+  --bg: #16181d;
+  --bg-raised: #1c1f26;
+  --bg-sunken: #111318;
+  --bg-input: #21242c;
+
+  /* Ocel — z gradientu kovadliny */
+  --steel-100: #dce6f2;
+  --steel-300: #b3c1d4;
+  --steel-500: #8496ad;
+  --steel-700: #6e8299;
+
+  --text: #e6ebf2;
+  --text-muted: #9aa6b8;
+  --text-faint: #6b7688;
+
+  --border: #2a2f39;
+  --border-strong: #3a414e;
+
+  /* Rozžhavený kov — akcent */
+  --hot: #ff7a2f;
+  --hot-bright: #ffd896;
+  --hot-dim: rgba(255, 122, 47, 0.14);
+
+  --danger: #f2606a;
+  --ok: #5ec27f;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+
+  --font: ui-sans-serif, system-ui, "Segoe UI", -apple-system, "Helvetica Neue",
+    sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono",
+    Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  /* Okno appky se netahá nahoru a dolů jako webová stránka. */
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--bg-input);
+  border-color: var(--steel-700);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--hot);
+  border-color: var(--hot);
+  color: #1a1006;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--hot-bright);
+  border-color: var(--hot-bright);
+}
+
+button.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+button.ghost:hover:not(:disabled) {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  width: 100%;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--hot);
+  box-shadow: 0 0 0 3px var(--hot-dim);
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--steel-700);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}

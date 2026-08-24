@@ -1,0 +1,8 @@
+# pnpm 11 čte nastavení odsud, ne z package.json ani .npmrc.
+#
+# esbuild dodává nativní binárku samostatným platformním balíčkem
+# (@esbuild/win32-x64, @esbuild/darwin-arm64, …) a jeho postinstall skript
+# jen ověřuje, že tam je. Nepouštět ho je proto bezpečné i správné — o jeden
+# install skript s plným přístupem k systému míň.
+allowBuilds:
+  esbuild: false

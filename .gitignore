@@ -1,0 +1,29 @@
+# Rust
+/target
+/tools/iconforge/target
+**/*.rs.bk
+
+# Node
+node_modules
+/dist
+.vite
+
+# Tauri
+/src-tauri/target
+/src-tauri/gen
+
+# Modely se do repa nikdy nedostanou — jde o desítky GB.
+*.gguf
+*.gguf.part
+*.gguf.part.map
+
+# Lokální nastavení a logy
+/.anvil
+*.log
+
+# Editory
+.DS_Store
+Thumbs.db
+.idea
+.vscode/*
+!.vscode/extensions.json

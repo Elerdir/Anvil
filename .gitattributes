@@ -1,0 +1,10 @@
+# Zdrojáky drž na LF; ať se diff nerozjede mezi Windows a macOS.
+* text=auto eol=lf
+# Dávkové soubory Windows musí mít CRLF, jinak je cmd.exe neinterpretuje správně.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# Binárky nechat být.
+*.png binary
+*.ico binary
+*.icns binary
+*.gguf binary

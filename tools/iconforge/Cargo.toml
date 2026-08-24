@@ -1,0 +1,19 @@
+[package]
+name = "anvil-iconforge"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Generátor ikon pro Anvil — jeden zdroj tvaru pro PNG, ICO i ICNS"
+
+# Záměrně mimo hlavní workspace (root Cargo.toml má tuhle cestu v `exclude`),
+# aby `cargo build` a `cargo test --all` nemusely překládat rasterizér.
+# Spouští se ručně: cargo run --release --manifest-path tools/iconforge/Cargo.toml
+
+[dependencies]
+# Čistě rustový 2D rasterizér — žádné systémové knihovny, takže tenhle
+# generátor jede stejně na Windows i na macOS. `png-format` (default) dodá
+# Pixmap::encode_png.
+tiny-skia = "0.11"
+
+[profile.release]
+opt-level = 2

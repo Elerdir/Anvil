@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Nové pushnutí do stejné větve zruší předchozí běh — na PR se stejně počítá
+# jen ten poslední a zbytečné běhy jen blokují frontu.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust — testy, formát, clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formát
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Bez feature `engine`, takže se nestaví llama.cpp. Pokrývá doménu,
+      # aplikační vrstvu i logiku infrastruktury — tedy všechno, co má testy.
+      - name: Testy
+        run: cargo test --workspace
+
+  engine:
+    name: Engine (llama.cpp) se přeloží
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # Jen `check`, ne `test`: samotný engine nemá jednotkové testy (ověřuje
+      # se proti reálnému modelu přes `examples/smoke`, což na CI nejde).
+      # Smysl téhle úlohy je chytit, že se kód rozešel s API llama-cpp-2 —
+      # bez ní by se to zjistilo až při lokálním buildu.
+      - name: cargo check --features engine
+        run: cargo check -p anvil-infrastructure --features engine
+
+  frontend:
+    name: Frontend — typy a build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `pnpm build` je `tsc --noEmit && vite build` — typová kontrola
+      # i skutečné sestavení.
+      - run: pnpm build
+
+  tauri:
+    name: Tauri shell se přeloží
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri na Linuxu potřebuje webkit a jeho okolí.
+      - name: Systémové závislosti
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+            patchelf libgtk-3-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # `tauri-build` v build.rs potřebuje existující `dist/`, jinak spadne
+      # na chybějícím frontendu.
+      - run: pnpm build
+
+      - run: cargo check -p anvil
