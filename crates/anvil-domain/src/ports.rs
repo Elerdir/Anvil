@@ -16,6 +16,7 @@ use crate::{
     history::ConversationSummary,
     id::ConversationId,
     model::{InferenceSettings, InstalledModel, ModelId, ModelRole, ModelSpec, Sampling},
+    workspace::RelativePath,
 };
 
 // --- Generování textu ------------------------------------------------------
@@ -212,6 +213,96 @@ pub trait ModelProvisioner: Send + Sync {
         cancel: CancellationToken,
         on_progress: Option<DownloadCallback>,
     ) -> DomainResult<InstalledModel>;
+}
+
+// --- Soubory ve workspace -------------------------------------------------
+
+/// Jeden zásah při hledání.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GrepHit {
+    pub file: RelativePath,
+    pub line: u32,
+    /// Obsah řádku, oříznutý na rozumnou délku.
+    pub text: String,
+}
+
+/// Kolik toho nástroje smí vrátit.
+///
+/// Nejsou to zdvořilostní limity — na hybridním MoE běhu se prompt zpracovává
+/// rychlostí ~27 tokenů za sekundu, takže **objem kontextu je doslova čas**.
+/// Čtyři tisíce tokenů obsahu znamenají dvě a půl minuty, než model začne
+/// odpovídat. Radši ať si vyžádá další kus, než aby jedno volání nasypalo
+/// do okna celý soubor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FsLimits {
+    pub max_lines_per_read: u32,
+    pub max_grep_hits: u32,
+    pub max_listed_files: u32,
+    /// Delší řádky se ořežou — minifikovaný JavaScript má klidně 50 kB na řádek.
+    pub max_line_chars: usize,
+}
+
+impl Default for FsLimits {
+    fn default() -> Self {
+        Self {
+            max_lines_per_read: 400,
+            max_grep_hits: 40,
+            max_listed_files: 200,
+            max_line_chars: 300,
+        }
+    }
+}
+
+/// Výřez souboru i s tím, kolik ho ještě zbývá.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileSlice {
+    pub path: RelativePath,
+    /// Číslo prvního vráceného řádku (1-based).
+    pub start_line: u32,
+    pub text: String,
+    /// Kolik řádků má soubor celkem.
+    pub total_lines: u32,
+}
+
+impl FileSlice {
+    /// Číslo posledního vráceného řádku.
+    pub fn end_line(&self) -> u32 {
+        if self.text.is_empty() {
+            return self.start_line.saturating_sub(1);
+        }
+        self.start_line + self.text.lines().count() as u32 - 1
+    }
+
+    /// Zbývá za koncem výřezu ještě něco?
+    pub fn truncated(&self) -> bool {
+        self.end_line() < self.total_lines
+    }
+}
+
+/// Čtení souborů uvnitř workspace.
+///
+/// Implementace **musí** držet hranici workspace i pro cesty, které projdou
+/// lexikální kontrolou [`RelativePath`] — tedy kanonizovat výslednou cestu
+/// a ověřit, že pořád leží pod rootem. Lexikální kontrola z principu nevidí
+/// symlinky.
+#[async_trait]
+pub trait WorkspaceFs: Send + Sync {
+    /// Soubory ve workspace, bez ignorovaných složek. `glob` je volitelný
+    /// filtr na název (`*.rs`, `src/**`).
+    async fn list(&self, glob: Option<&str>) -> DomainResult<Vec<RelativePath>>;
+
+    /// Přečte úsek souboru. `start_line` je 1-based; `None` znamená od začátku.
+    async fn read(
+        &self,
+        path: &RelativePath,
+        start_line: Option<u32>,
+        line_count: Option<u32>,
+    ) -> DomainResult<FileSlice>;
+
+    /// Najde vzor v souborech.
+    async fn grep(&self, pattern: &str, glob: Option<&str>) -> DomainResult<Vec<GrepHit>>;
+
+    fn limits(&self) -> FsLimits;
 }
 
 // --- Tajemství a nastavení ------------------------------------------------

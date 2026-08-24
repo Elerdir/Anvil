@@ -65,6 +65,8 @@ pub fn run() {
             commands::delete_conversation,
             commands::send_message,
             commands::cancel_generation,
+            commands::run_review,
+            commands::list_tools,
         ])
         .run(tauri::generate_context!())
         .expect("Tauri se nepodařilo spustit");

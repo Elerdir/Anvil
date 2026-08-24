@@ -43,6 +43,10 @@ neprovádějí.
 
 ### `anvil-application`
 
+- `agent/protocol` — parsování volání nástrojů z odpovědi modelu
+- `agent/tools` — nástroje a jejich sada
+- `agent/runner` — agentní smyčka i s pojistkami
+- `review` — code review nad otevřenou složkou
 - `chat` — `ChatService::send`: přidá dotaz, případně sloučí kontext, zavolá
   model, připojí odpověď
 - `compaction` — kdy a co sloučit (`plan_compaction` je čistá funkce)
@@ -58,6 +62,7 @@ neprovádějí.
 - `ai/llama_engine` — `ChatEngine` nad llama.cpp
 - `ai/model_downloader`, `ai/chunk_plan` — paralelní stahování s resume
 - `model_provisioner` — najít / zkopírovat / stáhnout model
+- `workspace_fs` — **druhá obrana sandboxu**, ignore pravidla, limity výstupů
 - `conversation_store` — historie v SQLite
 - `secrets`, `settings_store`, `paths`, `huggingface`
 
@@ -160,6 +165,41 @@ sebe a kdyby o pořadí rozhodovala aktivita, každá odpověď by mu ho zamích
 Přerovnání se posílá jako celý seznam ID a čísla se přepočítají od nuly —
 u desítek konverzací je to levné a odpadá tím vkládání mezi dvě sousední
 hodnoty.
+
+### Agentní smyčka má tři pojistky
+
+S malým modelem není otázka *jestli* se splete, ale jak často. Bez těchhle
+tří je smyčka nepoužitelná:
+
+1. **Ověření před provedením** (`ToolSpec::validate`). Chybné volání se
+   neprovede a model dostane konkrétní návod, co opravit — kolo se nepromarní.
+   Tolerantní je jen tam, kde se model plete předvídatelně a jednoznačně:
+   `"12"` místo `12` se srovná. Neznámý parametr se naopak odmítá, protože
+   tiše ho zahodit by znamenalo provést něco jiného, než co model zamýšlel.
+2. **Limit po sobě jdoucích chyb.** Když se model netrefí ani potřetí,
+   netrefí se ani po deváté — jen to bude trvat třikrát dýl.
+3. **Limit kol, jehož dosažení se hlásí.** „Nenašel jsem nic" a „došla kola"
+   jsou dvě velmi různé věci a uživatel je musí rozlišit.
+
+### Objem kontextu je doslova čas
+
+Prompt se zpracovává ~27 tokenů za sekundu, takže 4 000 tokenů obsahu znamená
+dvě a půl minuty čekání. Nástroje proto mají tvrdé stropy (`FsLimits`)
+a **vždycky říkají, že ořezaly** — jinak by model vyvozoval z neúplného
+a tvrdil, že projekt nic dalšího neobsahuje.
+
+Model taky nikdy nedostane obsah projektu předem. Dostane nástroje a hledá si
+sám; tím přestane hrát velikost projektu roli.
+
+### Sandbox má dvě vrstvy
+
+Lexikální kontrola v doméně (`RelativePath::parse`) odmítne absolutní cesty,
+únik přes `..`, řídicí znaky a vyhrazené názvy zařízení. **Symlinky ale
+z principu nevidí** — `odkaz.txt` je lexikálně nevinná cesta ukazující kamkoli.
+
+`LocalWorkspaceFs::resolve` proto každou výslednou cestu kanonizuje a ověří,
+že pořád leží pod kořenem. Bez toho by stačil jediný symlink v projektu
+k přečtení `~/.ssh/id_rsa`. Kryto testem na obou platformách.
 
 ### `AppSettings` nelze složit pozičně
 

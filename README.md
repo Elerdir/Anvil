@@ -9,6 +9,9 @@ Windows a macOS (Apple Silicon i Intel).
 ## Co umí teď
 
 - Chat s lokálním modelem, odpovědi česky
+- **Code review nad vybranou složkou** — model si sám čte soubory, hledá
+  v nich a nálezy hlásí strukturovaně (soubor, řádek, závažnost)
+- Nástroje i v běžném chatu, když je otevřená složka projektu
 - **Historie konverzací** v postranním panelu — přejmenování, připnutí,
   přerovnání tažením, indikace běžící odpovědi
 - **Dva sloty na modely** — jeden laděný na kód, druhý na češtinu, přepínatelné
@@ -22,7 +25,6 @@ Windows a macOS (Apple Silicon i Intel).
 
 | Fáze | Co |
 |---|---|
-| 2 | Nástroje pro čtení souborů + agentní smyčka → **code review** |
 | 3 | Větvení konverzace |
 | 4 | Úpravy souborů s náhledem diffu a potvrzením |
 | 5 | Vytvoření projektu od nuly |

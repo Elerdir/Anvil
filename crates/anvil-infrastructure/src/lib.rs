@@ -14,3 +14,4 @@ pub mod model_provisioner;
 pub mod paths;
 pub mod secrets;
 pub mod settings_store;
+pub mod workspace_fs;

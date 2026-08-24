@@ -11,6 +11,7 @@ interface Props {
   onSend: (text: string) => void;
   onCancel: () => void;
   onWorkspaceChange: (path: string | null) => void;
+  onReview: () => void;
 }
 
 /**
@@ -80,6 +81,17 @@ export function Composer(props: Props) {
             title="Zavřít složku"
           >
             ✕
+          </button>
+        </Show>
+
+        <Show when={props.workspacePath}>
+          <button
+            class="review-btn"
+            onClick={props.onReview}
+            disabled={props.disabled}
+            title="Nechat model projít projekt a najít problémy"
+          >
+            Zkontrolovat projekt
           </button>
         </Show>
 
