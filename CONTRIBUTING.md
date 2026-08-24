@@ -40,7 +40,7 @@ CI (`.github/workflows/ci.yml`) má čtyři úlohy a všechny jsou povinné:
 | `Rust — testy, formát, clippy` | `cargo fmt --check` (celý workspace), clippy a testy knihovních crate |
 | `Engine (llama.cpp) se přeloží` | `cargo check --features engine` — chytí rozejití s API llama-cpp-2 |
 | `Frontend — typy a build` | `tsc --noEmit` a `vite build` |
-| `Tauri shell se přeloží` | clippy nad `anvil` i s frontendem a systémovými knihovnami |
+| `Tauri shell se přeloží` | clippy a testy crate `anvil` i s frontendem a systémovými knihovnami |
 
 Tauri crate má vlastní úlohu, protože jako jediný potřebuje webkit a GTK.
 Rychlá úloha `rust` si díky tomu nemusí instalovat sto megabajtů balíčků
@@ -51,6 +51,11 @@ Lokálně to samé před odesláním:
 ```bash
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test && pnpm build
 ```
+
+Verze toolchainu je připnutá v `rust-toolchain.toml`. Rustup si ji stáhne sám,
+takže lokální clippy hlásí totéž co CI — bez toho projde build u autora
+a spadne až na CI na lintu, který jeho starší verze neznala. Zvyšovat
+vědomě a v samostatném PR.
 
 ## Co CI neověří
 

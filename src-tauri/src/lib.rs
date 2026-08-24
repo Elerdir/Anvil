@@ -16,6 +16,20 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // Bez tohohle je log po startu prázdný a při hlášení problému
+            // z něj nejde poznat ani to, jestli má build engine.
+            tracing::info!(
+                verze = env!("CARGO_PKG_VERSION"),
+                platforma = std::env::consts::OS,
+                engine = cfg!(feature = "engine"),
+                "Anvil startuje"
+            );
+            if !cfg!(feature = "engine") {
+                tracing::warn!(
+                    "Build je bez llama.cpp — model se nenačte.                      Spusť aplikaci přes run.bat (Windows) nebo scripts/run-mac.sh (macOS)."
+                );
+            }
+
             let state = AppState::new();
             app.manage(state);
 
@@ -64,4 +78,44 @@ async fn restore_last_workspace(app: &tauri::AppHandle) -> anvil_domain::error::
     }
     state.session.lock().await.workspace = Some(Workspace::new(path)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Pojistka proti chybě, která tuhle appku připravila o schopnost načíst
+    /// model: `engine-vulkan` zapínalo `engine` jen v infrastruktuře, ne tady.
+    /// Build s llama.cpp pak kompiloval záslepku a tvrdil uživateli, že je
+    /// bez enginu.
+    ///
+    /// Kontroluje se manifest, ne `cfg!` — chyba je v propojení feature, takže
+    /// by se běžným testem projevila jen v buildu, který llama.cpp skutečně
+    /// staví, a ten na CI neběží.
+    #[test]
+    fn gpu_feature_zapina_i_mistni_engine() {
+        let manifest = include_str!("../Cargo.toml");
+
+        for feature in ["engine-vulkan", "engine-metal"] {
+            let radek = manifest
+                .lines()
+                .map(str::trim)
+                .find(|l| l.starts_with(feature) && l.contains('='))
+                .unwrap_or_else(|| panic!("v Cargo.toml chybí feature {feature}"));
+
+            assert!(
+                radek.contains("\"engine\""),
+                "{feature} musí zapnout i místní `engine`, jinak se přeloží                  llama.cpp, ale použije se záslepka. Řádek: {radek}"
+            );
+        }
+    }
+
+    /// Když je engine přeložený v infrastruktuře, musí ho vidět i tenhle crate.
+    /// Doplňuje kontrolu manifestu o skutečný stav překladu.
+    #[test]
+    fn engine_sedi_s_infrastrukturou() {
+        assert_eq!(
+            anvil_infrastructure::ai::ENGINE_COMPILED,
+            cfg!(feature = "engine"),
+            "feature `engine` se rozešla mezi src-tauri a anvil-infrastructure"
+        );
+    }
 }

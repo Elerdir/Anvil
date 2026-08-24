@@ -27,8 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Verzi bere z rust-toolchain.toml, aby CI a lokální stroj hlásily totéž.
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
@@ -54,7 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.0"
       - uses: Swatinem/rust-cache@v2
 
       # Jen `check`, ne `test`: samotný engine nemá jednotkové testy (ověřuje
@@ -100,8 +104,9 @@ jobs:
             libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
             patchelf libgtk-3-dev
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           components: clippy
       - uses: Swatinem/rust-cache@v2
 
@@ -118,3 +123,8 @@ jobs:
 
       - name: Clippy (Tauri crate)
         run: cargo clippy -p anvil --all-targets -- -D warnings
+
+      # Testy `anvil` běží tady, protože rychlá úloha `rust` tenhle crate
+      # vynechává (potřeboval by webkit a GTK). Bez toho by se nepustily nikde.
+      - name: Testy (Tauri crate)
+        run: cargo test -p anvil

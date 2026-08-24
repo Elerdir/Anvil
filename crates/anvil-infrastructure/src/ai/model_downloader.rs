@@ -253,7 +253,7 @@ impl ModelDownloader {
     {
         tokio::fs::create_dir_all(&self.models_dir).await.ok();
         let target = self.models_dir.join(&model.filename);
-        let temp = self.models_dir.join(format!("{}.part", &model.filename));
+        let temp = self.models_dir.join(format!("{}.part", model.filename));
 
         on_progress(DownloadProgress {
             model_id: model.id.clone(),
