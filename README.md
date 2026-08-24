@@ -42,6 +42,10 @@ binárku s vestavěným frontendem a spustí ji. První build trvá ~10 minut
 (llama.cpp a Vulkan shadery), další spuštění jednotky sekund. `run.bat
 --rebuild` vynutí čistý build.
 
+Když Anvil už běží, skript to pozná a nabídne, že běžící instanci ukončí —
+linker by jinak nepřepsal zamčenou binárku a cargo by hlásilo jen
+nesrozumitelné „Přístup byl odepřen".
+
 ### Vývoj
 
 ```bash

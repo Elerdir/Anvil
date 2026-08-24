@@ -94,6 +94,24 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM ------ Bezici instance ------
+REM Linker neprepise zamcenou binarku a cargo hlasi jen "Pristup byl odepren
+REM (os error 5)", z ceho se pricina nepozna. Radsi to zjistime tady.
+tasklist /FI "IMAGENAME eq anvil.exe" 2>nul | find /I "anvil.exe" >nul
+if not errorlevel 1 (
+    echo Anvil uz bezi a drzi zamek na binarce - build by selhal.
+    choice /C AN /N /M "Ukoncit bezici instanci? [A]no / [N]e: "
+    if errorlevel 2 (
+        echo Preruseno. Zavri Anvil a spust run.bat znovu.
+        pause
+        exit /b 1
+    )
+    taskkill /F /IM anvil.exe >nul 2>&1
+    REM Windows uvolnuje popisovace souboru se zpozdenim; bez cekani by
+    REM linker porad narazil na zamek.
+    ping -n 3 127.0.0.1 >nul
+)
+
 REM ------ Cisty build na vyzadani ------
 if /I "%~1"=="--rebuild" (
     echo Vynuceny cisty build...
