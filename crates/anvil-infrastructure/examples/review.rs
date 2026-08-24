@@ -11,7 +11,9 @@
 //! * jestli model vůbec zavolá nástroj, nebo si obsah projektu vymyslí;
 //! * kolik volání je nepoužitelných (špatný formát, neznámý nástroj,
 //!   chybějící parametr) — tohle rozhoduje, jestli je smyčka použitelná;
-//! * jestli hlásí nálezy k souborům, které opravdu četl;
+//! * jestli hlásí nálezy k souborům, které opravdu četl — a jestli si to
+//!   nedovolí aspoň v závěrečném shrnutí, které přes `report_finding` neteče
+//!   a kontrolou nálezů proto projde;
 //! * kolik to celé stojí času, protože zpracování promptu roste s každým
 //!   kolem a je to hlavní složka čekání.
 //!
@@ -115,6 +117,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let workspace = Workspace::new(koren)?;
     let fs: Arc<dyn WorkspaceFs> = Arc::new(LocalWorkspaceFs::new(workspace)?);
+    // Kopie pro závěrečné kontroly — `run` si `fs` odnese.
+    let fs_pro_kontrolu = fs.clone();
     let engine: Arc<dyn anvil_domain::ports::ChatEngine> = Arc::new(engine);
 
     // Průběh se sbírá i vypisuje. Vypisuje proto, aby bylo při desetiminutovém
@@ -237,6 +241,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Nálezy k souborům, které model nikdy neotevřel: {}. Instrukce „nehádej“ \
              nestačí — buď ji zpřísnit, nebo takové nálezy odfiltrovat.",
             nepodlozene.join(", ")
+        ));
+    }
+
+    // Nálezy prochází přes `report_finding`, a tam se dá kontrolovat. Závěrečné
+    // shrnutí je ale obyčejný text — a přesně v něm si model dovolil tvrdit
+    // věci o souborech, které nikdy neotevřel: „při načítání nastavení by
+    // aplikace spadla" o souboru, kde všechny ty `unwrap()` stojí v testech.
+    // Do nálezů to nedal, takže kontrola nálezů to propustila. Uživatel přitom
+    // čte právě tohle shrnutí.
+    //
+    // Porovnává se proti skutečným cestám v projektu, ne proti tomu, co v textu
+    // vypadá jako cesta — z „např. `src/model.rs`" se tak nedá vyrobit planý
+    // poplach kvůli zkratce nebo interpunkci.
+    let vsechny: Vec<String> = fs_pro_kontrolu
+        .list(None)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+    let zminene_neprectene: Vec<&String> = vsechny
+        .iter()
+        .filter(|p| outcome.summary.contains(p.as_str()) && !precteno.contains(&p.as_str()))
+        .collect();
+    if !zminene_neprectene.is_empty() {
+        problemy.push(format!(
+            "Shrnutí mluví o souborech, které model neotevřel: {}. Z grepu viděl \
+             jen jednotlivé řádky bez okolí — tvrzení o tom, co soubor dělá, \
+             z nich neplyne.",
+            zminene_neprectene
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 

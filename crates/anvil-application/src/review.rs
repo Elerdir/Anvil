@@ -47,7 +47,10 @@ než co slibuje jeho název.
 A hlavně **nehádej**. Nález hlas jen k souboru, který jsi opravdu četl,
 a s řádkem, který jsi opravdu viděl. Když si nejsi jistý, radši to neuváděj.
 
-Až budeš hotový, napiš krátké shrnutí normálním textem bez volání nástrojů.";
+Až budeš hotový, napiš krátké shrnutí normálním textem bez volání nástrojů.
+Ve shrnutí **nesmí přibýt nic nového**: shrň, co jsi nahlásil, a nic dalšího.
+O souboru, který jsi neotevřel, netvrď, co dělá — z jednoho řádku, který ti
+vrátil `grep`, nepoznáš ani to, jestli není v testech.";
 
 /// Instrukce pro běžný chat nad otevřenou složkou.
 ///
