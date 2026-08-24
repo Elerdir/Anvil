@@ -154,6 +154,14 @@ mod tests {
     #[test]
     fn nazev_aplikace_je_v_ceste() {
         // Kdyby se změnil, uživatel přijde o nastavení — má to být vědomý krok.
-        assert!(config_dir().to_string_lossy().contains(APP_NAME));
+        //
+        // Porovnává se bez ohledu na velikost písmen: Windows a macOS dají
+        // „Anvil", ale na Linuxu `directories` drží XDG konvenci a vyrobí
+        // `~/.config/anvil`. Test hlídá název, ne jeho tvar na dané platformě.
+        let cesta = config_dir().to_string_lossy().to_lowercase();
+        assert!(
+            cesta.contains(&APP_NAME.to_lowercase()),
+            "název aplikace zmizel z cesty {cesta}"
+        );
     }
 }
