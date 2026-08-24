@@ -33,7 +33,11 @@ Postup:
 1. Rozhlédni se — `list_files`, ať víš, co v projektu je.
 2. Hledej cíleně — `grep` na typické zdroje chyb je levnější než číst soubory po jednom.
 3. Čti jen to, co potřebuješ, a po částech.
-4. Každý problém nahlas zvlášť přes `report_finding`.
+4. Každý problém nahlas **hned, jak ho najdeš**, zvlášť přes `report_finding`.
+
+Nálezy si nešetři na konec. Kol je omezený počet a co nenahlásíš cestou,
+to se ke mně nedostane. Nahlásit nález a pokračovat v hledání je v pořádku —
+klidně jich pošli víc v jednom kole.
 
 Co hledat: chyby, které se projeví za běhu (pády, špatné ošetření chyb, souběh),
 bezpečnostní díry, tiché ignorování chyb a místa, kde kód dělá něco jiného,
