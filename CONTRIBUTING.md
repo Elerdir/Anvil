@@ -37,10 +37,14 @@ CI (`.github/workflows/ci.yml`) má čtyři úlohy a všechny jsou povinné:
 
 | Úloha | Co ověřuje |
 |---|---|
-| `Rust — testy, formát, clippy` | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` |
+| `Rust — testy, formát, clippy` | `cargo fmt --check` (celý workspace), clippy a testy knihovních crate |
 | `Engine (llama.cpp) se přeloží` | `cargo check --features engine` — chytí rozejití s API llama-cpp-2 |
 | `Frontend — typy a build` | `tsc --noEmit` a `vite build` |
-| `Tauri shell se přeloží` | `cargo check -p anvil` i s frontendem |
+| `Tauri shell se přeloží` | clippy nad `anvil` i s frontendem a systémovými knihovnami |
+
+Tauri crate má vlastní úlohu, protože jako jediný potřebuje webkit a GTK.
+Rychlá úloha `rust` si díky tomu nemusí instalovat sto megabajtů balíčků
+a dá zpětnou vazbu dřív než zbytek.
 
 Lokálně to samé před odesláním:
 

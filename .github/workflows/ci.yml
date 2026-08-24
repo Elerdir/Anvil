@@ -13,9 +13,14 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+  # Pozor: `RUSTFLAGS: -D warnings` tu záměrně **není**. Dopadalo by i na
+  # závislosti, takže by build shodilo varování z cizího kódu, se kterým se
+  # nedá nic dělat. Přísnost se vynucuje explicitně přes `cargo clippy`.
 
 jobs:
+  # Knihovní crate: doména, aplikační vrstva, infrastruktura. Nepotřebují
+  # žádné systémové knihovny, takže je tahle úloha rychlá a dá zpětnou vazbu
+  # dřív než zbytek.
   rust:
     name: Rust — testy, formát, clippy
     runs-on: ubuntu-latest
@@ -28,16 +33,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Formátování se kontroluje pro celý workspace včetně src-tauri —
+      # na to systémové knihovny potřeba nejsou.
       - name: Formát
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: |
+          cargo clippy --all-targets \
+            -p anvil-domain -p anvil-application -p anvil-infrastructure \
+            -- -D warnings
 
       # Bez feature `engine`, takže se nestaví llama.cpp. Pokrývá doménu,
       # aplikační vrstvu i logiku infrastruktury — tedy všechno, co má testy.
       - name: Testy
-        run: cargo test --workspace
+        run: cargo test -p anvil-domain -p anvil-application -p anvil-infrastructure
 
   engine:
     name: Engine (llama.cpp) se přeloží
@@ -60,6 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Verzi si vezme z pole `packageManager` v package.json.
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -73,13 +84,15 @@ jobs:
       # i skutečné sestavení.
       - run: pnpm build
 
+  # Tauri crate zvlášť, protože jako jediný potřebuje webkit a GTK. Clippy nad
+  # ním běží tady a ne v úloze `rust`, aby si rychlá úloha nemusela instalovat
+  # sto megabajtů systémových balíčků.
   tauri:
     name: Tauri shell se přeloží
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # Tauri na Linuxu potřebuje webkit a jeho okolí.
       - name: Systémové závislosti
         run: |
           sudo apt-get update
@@ -88,6 +101,8 @@ jobs:
             patchelf libgtk-3-dev
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
 
       - uses: pnpm/action-setup@v4
@@ -101,4 +116,5 @@ jobs:
       # na chybějícím frontendu.
       - run: pnpm build
 
-      - run: cargo check -p anvil
+      - name: Clippy (Tauri crate)
+        run: cargo clippy -p anvil --all-targets -- -D warnings
