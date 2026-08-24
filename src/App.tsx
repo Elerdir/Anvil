@@ -3,10 +3,12 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Composer } from "./components/Composer";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { Sidebar } from "./components/Sidebar";
 import {
   api,
   CommandError,
   events,
+  type ConversationSummaryView,
   type GenerationStats,
   type ModelView,
   type Role,
@@ -23,6 +25,7 @@ export function App() {
   const [session, setSession] = createSignal<SessionView | null>(null);
   const [settings, setSettings] = createSignal<SettingsView | null>(null);
   const [models, setModels] = createSignal<ModelView[]>([]);
+  const [chats, setChats] = createSignal<ConversationSummaryView[]>([]);
   const [streaming, setStreaming] = createSignal("");
   const [generating, setGenerating] = createSignal(false);
   const [stats, setStats] = createSignal<GenerationStats | null>(null);
@@ -31,19 +34,31 @@ export function App() {
 
   const unlisteners: Array<() => void> = [];
 
+  const hlasit = (e: unknown) => setChyba(e instanceof Error ? e.message : String(e));
+
+  const nacistChaty = async () => {
+    try {
+      setChats(await api.listConversations());
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
   const nacistVse = async () => {
     try {
-      const [s, n, m] = await Promise.all([
+      const [s, n, m, c] = await Promise.all([
         api.getSession(),
         api.getSettings(),
         api.listModels(),
+        api.listConversations(),
       ]);
       setSession(s);
       setSettings(n);
       setModels(m);
+      setChats(c);
       setChyba(null);
     } catch (e) {
-      setChyba(e instanceof Error ? e.message : String(e));
+      hlasit(e);
     }
   };
 
@@ -76,16 +91,16 @@ export function App() {
     try {
       setSession(await api.sendMessage(text));
     } catch (e) {
-      if (e instanceof CommandError && e.cancelled) {
-        // Zrušil to uživatel — částečná odpověď už v konverzaci je.
-        setSession(await api.getSession());
-      } else {
-        setChyba(e instanceof Error ? e.message : String(e));
-        setSession(await api.getSession());
+      if (!(e instanceof CommandError && e.cancelled)) {
+        hlasit(e);
       }
+      // Po zrušení i po chybě je v konverzaci to, co stihlo vzniknout.
+      setSession(await api.getSession());
     } finally {
       setGenerating(false);
       setStreaming("");
+      // Název se odvozuje z prvního dotazu, takže se seznam musí obnovit.
+      await nacistChaty();
     }
   };
 
@@ -98,7 +113,7 @@ export function App() {
       setSession(await api.setWorkspace(path));
       setChyba(null);
     } catch (e) {
-      setChyba(e instanceof Error ? e.message : String(e));
+      hlasit(e);
     }
   };
 
@@ -111,13 +126,71 @@ export function App() {
       // Model se nepřepíná sám — dva se do paměti nevejdou a načtení trvá.
       // Uživatel ho spustí v nastavení, až bude chtít.
     } catch (e) {
-      setChyba(e instanceof Error ? e.message : String(e));
+      hlasit(e);
     }
   };
 
   const novaKonverzace = async () => {
     setStats(null);
-    setSession(await api.newConversation());
+    try {
+      setSession(await api.newConversation());
+      await nacistChaty();
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
+  const otevrit = async (id: string) => {
+    if (generating()) return; // přepnutí uprostřed odpovědi by ji utnulo
+    setStats(null);
+    try {
+      setSession(await api.openConversation(id));
+      await nacistChaty();
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
+  const prejmenovat = async (id: string, title: string) => {
+    // Seznam se přepíše hned, ať název neposkočí zpátky a pak dopředu.
+    setChats((v) => v.map((c) => (c.id === id ? { ...c, title } : c)));
+    try {
+      await api.renameConversation(id, title);
+    } catch (e) {
+      hlasit(e);
+    }
+    await nacistChaty();
+  };
+
+  const pripnout = async (id: string, pinned: boolean) => {
+    try {
+      await api.pinConversation(id, pinned);
+      await nacistChaty();
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
+  const prerovnat = async (ids: string[]) => {
+    // Nejdřív lokálně, ať položka po puštění nepřeskočí zpátky.
+    const podleId = new Map(chats().map((c) => [c.id, c]));
+    const nove = ids.map((id) => podleId.get(id)).filter((c): c is ConversationSummaryView => !!c);
+    setChats(nove);
+    try {
+      await api.reorderConversations(ids);
+    } catch (e) {
+      hlasit(e);
+      await nacistChaty();
+    }
+  };
+
+  const smazat = async (id: string) => {
+    try {
+      setSession(await api.deleteConversation(id));
+      await nacistChaty();
+    } catch (e) {
+      hlasit(e);
+    }
   };
 
   const modelNazev = () => {
@@ -126,27 +199,35 @@ export function App() {
   };
 
   return (
-    <div class="app">
-      <header class="topbar">
-        <div class="brand">
-          <span class="brand-mark">▣</span>
-          <span class="brand-name">Anvil</span>
-        </div>
+    <div class="shell">
+      <Sidebar
+        conversations={chats()}
+        activeId={session()?.conversationId ?? null}
+        generatingId={generating() ? (session()?.conversationId ?? null) : null}
+        onNew={novaKonverzace}
+        onOpen={otevrit}
+        onRename={prejmenovat}
+        onPin={pripnout}
+        onReorder={prerovnat}
+        onDelete={smazat}
+        onSettings={() => setNastaveniOtevrena(true)}
+      />
 
-        <div class="topbar-status" title={session()?.planDescription ?? ""}>
-          <Show
-            when={session()?.loadedModel}
-            fallback={<span class="status-idle">Není načtený model</span>}
-          >
-            <span class="status-dot" />
-            <span class="status-model">{modelNazev()}</span>
-            <Show when={session()?.planDescription}>
-              <span class="status-plan">{session()!.planDescription}</span>
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-status" title={session()?.planDescription ?? ""}>
+            <Show
+              when={session()?.loadedModel}
+              fallback={<span class="status-idle">Není načtený model</span>}
+            >
+              <span class="status-dot" />
+              <span class="status-model">{modelNazev()}</span>
+              <Show when={session()?.planDescription}>
+                <span class="status-plan">{session()!.planDescription}</span>
+              </Show>
             </Show>
-          </Show>
-        </div>
+          </div>
 
-        <div class="topbar-actions">
           <Show when={settings()}>
             {(n) => (
               <button class="role-switch" onClick={prepnoutRoli} title="Přepnout režim">
@@ -154,63 +235,65 @@ export function App() {
               </button>
             )}
           </Show>
-          <button class="ghost" onClick={novaKonverzace} title="Nová konverzace">
-            Nová
-          </button>
-          <button class="ghost" onClick={() => setNastaveniOtevrena(true)} title="Nastavení">
-            Nastavení
-          </button>
+        </header>
+
+        {/* Kontejner je tu vždycky, i prázdný. Kdyby se podmíněné pruhy
+            objevovaly a mizely jako přímí potomci mřížky, posunuly by se
+            řádky a `1fr` by dostalo pole pro dotaz místo konverzace —
+            přesně to dělalo, že pole viselo uprostřed okna. */}
+        <div class="notices">
+          <Show when={session() && !session()!.engineAvailable}>
+            <div class="banner">
+              Tenhle build je bez enginu llama.cpp — model se nenačte. Spusť appku přes{" "}
+              <code>run.bat</code> (Windows) nebo <code>scripts/run-mac.sh</code> (macOS).
+            </div>
+          </Show>
+
+          <Show when={chyba()}>
+            {(e) => (
+              <div class="banner banner-error">
+                {e()}
+                <button class="ghost" onClick={() => setChyba(null)}>
+                  ✕
+                </button>
+              </div>
+            )}
+          </Show>
         </div>
-      </header>
 
-      <Show when={session() && !session()!.engineAvailable}>
-        <div class="banner">
-          Tenhle build je bez enginu llama.cpp — model se nenačte. Spusť appku přes{" "}
-          <code>run.bat</code> (Windows) nebo <code>scripts/run-mac.sh</code> (macOS).
+        <MessageList
+          messages={session()?.messages ?? []}
+          streaming={streaming()}
+          generating={generating()}
+          hasSummary={session()?.hasSummary ?? false}
+        />
+
+        <div class="dock">
+          <Show when={stats()}>
+            {(s) => (
+              <div class="stats">
+                {s().generatedTokens} tokenů · {s().tokensPerSecond.toFixed(1)} tok/s · první
+                token {(s().timeToFirstTokenMs / 1000).toFixed(1)} s
+                <Show when={s().compactedMessages}>
+                  {(n) => <> · sloučeno {n()} starších zpráv</>}
+                </Show>
+              </div>
+            )}
+          </Show>
+
+          <Composer
+            workspacePath={session()?.workspacePath ?? null}
+            workspaceName={session()?.workspaceName ?? null}
+            disabled={!session()?.loadedModel || generating()}
+            generating={generating()}
+            usedTokens={session()?.usedTokens ?? 0}
+            contextTokens={session()?.contextTokens ?? 0}
+            onSend={odeslat}
+            onCancel={zrusit}
+            onWorkspaceChange={zmenitSlozku}
+          />
         </div>
-      </Show>
-
-      <Show when={chyba()}>
-        {(e) => (
-          <div class="banner banner-error">
-            {e()}
-            <button class="ghost" onClick={() => setChyba(null)}>
-              ✕
-            </button>
-          </div>
-        )}
-      </Show>
-
-      <MessageList
-        messages={session()?.messages ?? []}
-        streaming={streaming()}
-        generating={generating()}
-        hasSummary={session()?.hasSummary ?? false}
-      />
-
-      <Show when={stats()}>
-        {(s) => (
-          <div class="stats">
-            {s().generatedTokens} tokenů · {s().tokensPerSecond.toFixed(1)} tok/s · první token{" "}
-            {(s().timeToFirstTokenMs / 1000).toFixed(1)} s
-            <Show when={s().compactedMessages}>
-              {(n) => <> · sloučeno {n()} starších zpráv</>}
-            </Show>
-          </div>
-        )}
-      </Show>
-
-      <Composer
-        workspacePath={session()?.workspacePath ?? null}
-        workspaceName={session()?.workspaceName ?? null}
-        disabled={!session()?.loadedModel || generating()}
-        generating={generating()}
-        usedTokens={session()?.usedTokens ?? 0}
-        contextTokens={session()?.contextTokens ?? 0}
-        onSend={odeslat}
-        onCancel={zrusit}
-        onWorkspaceChange={zmenitSlozku}
-      />
+      </main>
 
       <Show when={nastaveniOtevrena() && settings()}>
         {(n) => (

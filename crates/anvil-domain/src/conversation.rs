@@ -78,6 +78,12 @@ pub struct Conversation {
     /// Poslední zpráva, kterou souhrn pokrývá (včetně).
     #[serde(default)]
     pub compacted_through: Option<MessageId>,
+    /// Připnutá konverzace zůstává v seznamu nahoře.
+    #[serde(default)]
+    pub pinned: bool,
+    /// Pozice v seznamu. Menší číslo = výš. Viz [`crate::history`].
+    #[serde(default)]
+    pub sort_order: i64,
     pub messages: Vec<Message>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -97,6 +103,8 @@ impl Conversation {
             model_id: None,
             summary: None,
             compacted_through: None,
+            pinned: false,
+            sort_order: 0,
             messages: Vec::new(),
             created_at: now,
             updated_at: now,

@@ -8,16 +8,16 @@ use anvil_domain::{
     error::{DomainError, DomainResult},
     model::{InstalledModel, ModelId, ModelSpec},
     ports::{
-        ChatEngine, ModelCatalog, ModelProvisioner, SecretKey, SecretStore, SettingsStore,
-        TokenValidator,
+        ChatEngine, ConversationStore, ModelCatalog, ModelProvisioner, SecretKey, SecretStore,
+        SettingsStore, TokenValidator,
     },
     settings::AppSettings,
     workspace::Workspace,
 };
 use anvil_infrastructure::{
-    ai::model_catalog::StaticModelCatalog, huggingface::HuggingFaceClient,
-    model_provisioner::FileSystemModelProvisioner, paths, secrets::KeyringSecretStore,
-    settings_store::JsonSettingsStore,
+    ai::model_catalog::StaticModelCatalog, conversation_store::SqliteConversationStore,
+    huggingface::HuggingFaceClient, model_provisioner::FileSystemModelProvisioner, paths,
+    secrets::KeyringSecretStore, settings_store::JsonSettingsStore,
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -45,6 +45,7 @@ pub struct Session {
 
 pub struct AppState {
     pub settings_store: Arc<dyn SettingsStore>,
+    pub conversations: Arc<dyn ConversationStore>,
     pub secrets: Arc<dyn SecretStore>,
     pub catalog: Arc<dyn ModelCatalog>,
     pub validator: Arc<dyn TokenValidator>,
@@ -53,9 +54,34 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new() -> Self {
+    /// Otevře úložiště historie a poskládá stav.
+    ///
+    /// Když se databáze otevřít nepodaří (plný disk, poškozený soubor),
+    /// aplikace **nastartuje** s historií jen v paměti a hlasitě to zaloguje.
+    /// Odmítnout start kvůli historii by uživatele připravilo i o to, co
+    /// funguje.
+    pub async fn new() -> Self {
+        let cesta = paths::data_dir().join("history.db");
+        let conversations: Arc<dyn ConversationStore> =
+            match SqliteConversationStore::open(&cesta).await {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    tracing::error!(
+                        path = %cesta.display(),
+                        error = %e,
+                        "Historii se nepodařilo otevřít — konverzace se tenhle běh neuloží"
+                    );
+                    Arc::new(
+                        SqliteConversationStore::in_memory()
+                            .await
+                            .expect("paměťová databáze"),
+                    )
+                }
+            };
+
         Self {
             settings_store: Arc::new(JsonSettingsStore::new()),
+            conversations,
             secrets: Arc::new(KeyringSecretStore::new()),
             catalog: Arc::new(StaticModelCatalog),
             validator: Arc::new(HuggingFaceClient::new()),
@@ -139,11 +165,5 @@ impl AppState {
             .engine
             .clone()
             .ok_or_else(|| DomainError::not_found("není načtený žádný model"))
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new()
     }
 }

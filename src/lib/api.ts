@@ -35,7 +35,17 @@ export interface MessageView {
   tokenCount: number | null;
 }
 
+export interface ConversationSummaryView {
+  id: string;
+  title: string;
+  pinned: boolean;
+  messageCount: number;
+  updatedAt: string;
+}
+
 export interface SessionView {
+  conversationId: string | null;
+  generating: boolean;
   loadedModel: string | null;
   planDescription: string | null;
   workspacePath: string | null;
@@ -155,6 +165,15 @@ export const api = {
 
   getSession: () => call<SessionView>("get_session"),
   newConversation: () => call<SessionView>("new_conversation"),
+
+  listConversations: () => call<ConversationSummaryView[]>("list_conversations"),
+  openConversation: (id: string) => call<SessionView>("open_conversation", { id }),
+  renameConversation: (id: string, title: string) =>
+    call<void>("rename_conversation", { id, title }),
+  pinConversation: (id: string, pinned: boolean) =>
+    call<void>("pin_conversation", { id, pinned }),
+  reorderConversations: (ids: string[]) => call<void>("reorder_conversations", { ids }),
+  deleteConversation: (id: string) => call<SessionView>("delete_conversation", { id }),
   sendMessage: (text: string) => call<SessionView>("send_message", { text }),
   cancelGeneration: () => call<boolean>("cancel_generation"),
 };

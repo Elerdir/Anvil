@@ -10,6 +10,7 @@
 
 pub mod conversation;
 pub mod error;
+pub mod history;
 pub mod id;
 pub mod model;
 pub mod ports;
@@ -18,6 +19,7 @@ pub mod workspace;
 
 pub use conversation::{Conversation, Message, Role};
 pub use error::{DomainError, DomainResult};
+pub use history::ConversationSummary;
 pub use id::{ConversationId, MessageId};
 pub use model::{
     ChatTemplateKind, InferenceSettings, InstalledModel, ModelId, ModelRole, ModelSpec, Sampling,

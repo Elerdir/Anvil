@@ -11,8 +11,10 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    conversation::Message,
+    conversation::{Conversation, Message},
     error::DomainResult,
+    history::ConversationSummary,
+    id::ConversationId,
     model::{InferenceSettings, InstalledModel, ModelId, ModelRole, ModelSpec, Sampling},
 };
 
@@ -246,6 +248,33 @@ pub trait SecretStore: Send + Sync {
 pub trait TokenValidator: Send + Sync {
     /// Vrátí uživatelské jméno, ke kterému token patří.
     async fn validate_huggingface(&self, token: &str) -> DomainResult<String>;
+}
+
+/// Historie konverzací.
+///
+/// Seznam se načítá bez zpráv ([`ConversationSummary`]) — při startu by
+/// nemělo smysl tahat do paměti celou historii kvůli tomu, aby se vlevo
+/// vypsalo pár názvů.
+#[async_trait]
+pub trait ConversationStore: Send + Sync {
+    /// Přehled konverzací seřazený k zobrazení (připnuté nahoře).
+    async fn list(&self) -> DomainResult<Vec<ConversationSummary>>;
+
+    async fn load(&self, id: ConversationId) -> DomainResult<Conversation>;
+
+    /// Vloží nebo přepíše konverzaci i s jejími zprávami.
+    async fn save(&self, conversation: &Conversation) -> DomainResult<()>;
+
+    async fn rename(&self, id: ConversationId, title: &str) -> DomainResult<()>;
+
+    async fn set_pinned(&self, id: ConversationId, pinned: bool) -> DomainResult<()>;
+
+    /// Přepíše pořadí podle zadaného seznamu ID. Konverzace, které v seznamu
+    /// nejsou, si své pořadí ponechají.
+    async fn reorder(&self, ids: &[ConversationId]) -> DomainResult<()>;
+
+    /// Smaže konverzaci. Smazání neexistující není chyba.
+    async fn delete(&self, id: ConversationId) -> DomainResult<()>;
 }
 
 /// Trvalé nastavení aplikace.

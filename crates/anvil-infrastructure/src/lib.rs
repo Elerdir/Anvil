@@ -8,6 +8,7 @@
 //! zbytek přeloží a otestuje kdekoli.
 
 pub mod ai;
+pub mod conversation_store;
 pub mod huggingface;
 pub mod model_provisioner;
 pub mod paths;
