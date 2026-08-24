@@ -15,9 +15,10 @@ description = "Doménové jádro Anvilu — entity, hodnotové objekty a porty. 
 async-trait = { workspace = true }
 tokio-util = { workspace = true }
 serde = { workspace = true }
+# Hodnotový typ pro argumenty nástrojů — žádné I/O, doména zůstává čistá.
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
