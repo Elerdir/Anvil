@@ -13,6 +13,13 @@
 //! pustit `cargo test` bez pětiminutového buildu a bez připraveného
 //! prostředí — a testy, které se nepouštějí, nikoho nechrání.
 
+/// Byl engine (llama.cpp) přeložen do téhle knihovny?
+///
+/// Existuje proto, aby si nadřazené crate mohly ověřit, že jejich vlastní
+/// feature `engine` sedí s tím, co se skutečně přeložilo — Cargo features se
+/// přes hranici crate nepropagují zpět a rozejití se jinak pozná až za běhu.
+pub const ENGINE_COMPILED: bool = cfg!(feature = "engine");
+
 pub mod chat_template;
 pub mod chunk_plan;
 pub mod gemma;

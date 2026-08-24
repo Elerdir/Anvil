@@ -17,11 +17,18 @@ tauri-build = { workspace = true }
 
 [features]
 default = []
-# Přeposílají se do infrastruktury — bez nich se appka spustí, ale model
-# nenačte a řekne proč.
+
+# Bez enginu se appka spustí, ale model nenačte a řekne proč.
+#
+# `engine-vulkan` a `engine-metal` musí zapnout i **místní** `engine`, ne jen
+# ten v infrastruktuře. Cargo features se přes hranici crate nepropagují zpět:
+# `anvil-infrastructure/engine-vulkan` zapne `engine` v infrastruktuře, ale
+# `cfg!(feature = "engine")` v tomhle crate by zůstalo `false`. Aplikace by se
+# pak přeložila i s llama.cpp, ale kompilovala by záslepku místo načítání
+# modelu — a tvrdila by uživateli, že je build bez enginu.
 engine = ["anvil-infrastructure/engine"]
-engine-vulkan = ["anvil-infrastructure/engine-vulkan"]
-engine-metal = ["anvil-infrastructure/engine-metal"]
+engine-vulkan = ["engine", "anvil-infrastructure/engine-vulkan"]
+engine-metal = ["engine", "anvil-infrastructure/engine-metal"]
 
 [dependencies]
 anvil-domain = { workspace = true }

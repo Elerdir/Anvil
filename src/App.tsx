@@ -166,8 +166,7 @@ export function App() {
       <Show when={session() && !session()!.engineAvailable}>
         <div class="banner">
           Tenhle build je bez enginu llama.cpp — model se nenačte. Spusť appku přes{" "}
-          <code>scripts\dev-vulkan.bat</code> (Windows) nebo <code>scripts/dev-metal.sh</code>{" "}
-          (macOS).
+          <code>run.bat</code> (Windows) nebo <code>scripts/run-mac.sh</code> (macOS).
         </div>
       </Show>
 

@@ -1,0 +1,10 @@
+# Připnutá verze toolchainu.
+#
+# Bez toho se stane přesně tohle: lokální clippy projde, CI má novější verzi,
+# zná víc lintů a PR spadne na něčem, co u autora nebylo vidět. Rustup si tuhle
+# verzi stáhne sám, takže stačí soubor commitnout.
+#
+# Zvyšovat vědomě a v samostatném PR, ať je vidět, co nová verze vytkla.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
