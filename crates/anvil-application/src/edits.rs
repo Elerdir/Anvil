@@ -114,7 +114,15 @@ impl EditPlan {
             });
         }
 
-        let vysledek = kind.apply(soucasny.as_deref())?;
+        let vysledek = kind.apply(soucasny.as_deref()).map_err(|e| {
+            // „Úsek se v souboru nevyskytuje" je matoucí, když ho model
+            // opsal z disku správně a jen mezitím sám soubor změnil. Ať
+            // z hlášky pozná, že si má přečíst rozpracované znění.
+            match e {
+                EditError::NotFound if !novy_soubor => EditError::NotFoundAfterEdit,
+                jina => jina,
+            }
+        })?;
         let nahled = EditPreview::new(path.clone(), puvodni.as_deref(), &vysledek);
 
         match self.changes.iter_mut().find(|c| c.path == path) {
@@ -367,6 +375,50 @@ mod tests {
 
         assert_eq!(err, EditError::Ambiguous { count: 3 });
         assert!(plan.is_empty(), "odmítnutá úprava se nesmí zapamatovat");
+    }
+
+    /// Přesně tohle se stalo skutečné Gemmě: úspěšně opravila `cesta()`,
+    /// pak poslala tutéž opravu znovu a dostala „úsek se nevyskytuje“.
+    /// Ona ho přitom z disku opsala správně — jen mezitím sama soubor
+    /// změnila a rozpracované znění nevidí.
+    #[tokio::test]
+    async fn opakovana_uprava_rekne_ze_soubor_uz_je_zmeneny() {
+        let fs = fs();
+        let mut plan = EditPlan::new();
+        plan.propose(
+            &fs,
+            cesta("src/main.rs"),
+            nahrad("f().unwrap()", "f().unwrap_or(0)"),
+        )
+        .await
+        .unwrap();
+
+        let err = plan
+            .propose(
+                &fs,
+                cesta("src/main.rs"),
+                nahrad("f().unwrap()", "f().unwrap_or_default()"),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, EditError::NotFoundAfterEdit);
+        assert!(err.to_string().contains("předchozí úprava"), "{err}");
+        assert!(err.to_string().contains("Přečti si soubor znovu"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn u_netknuteho_souboru_zustava_bezna_hlaska() {
+        // Rozlišení má smysl jen tam, kde soubor opravdu čeká s úpravou.
+        let fs = fs();
+        let mut plan = EditPlan::new();
+        let err = plan
+            .propose(&fs, cesta("src/main.rs"), nahrad("neexistuje", "x"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, EditError::NotFound);
+        assert!(err.to_string().contains("odsazení"), "{err}");
     }
 
     #[tokio::test]
