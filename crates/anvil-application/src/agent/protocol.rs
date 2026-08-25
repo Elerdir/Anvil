@@ -49,6 +49,38 @@ impl ParsedResponse {
     }
 }
 
+/// Pokusil se model zavolat nástroj **prózou**, mimo blok `<tool>`?
+///
+/// Vrací jméno nástroje, o který zjevně šlo. Hledá se `nazev(` nebo `nazev {`
+/// — tvar, který model použije, když sklouzne do zápisu volání funkce místo
+/// domluveného protokolu. Skutečná Gemma takhle poslala `report_finding(file=…)`
+/// a nález se ztratil, protože smyčka odpověď bez bloku bere jako „hotovo".
+///
+/// Samotná **zmínka** jména nestačí: „nahlásil jsem to přes report_finding"
+/// je legitimní věta v shrnutí a nesmí spustit připomínku formátu.
+pub fn tool_called_as_prose(prose: &str, names: &[String]) -> Option<String> {
+    let text = prose.trim();
+    for name in names {
+        let mut od = 0;
+        while let Some(i) = text[od..].find(name.as_str()) {
+            let zacatek = od + i;
+            let konec = zacatek + name.len();
+
+            // Jméno musí stát samostatně, ne uvnitř delšího slova.
+            let pred_je_slovo = text[..zacatek]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+            let za = text[konec..].trim_start();
+            if !pred_je_slovo && (za.starts_with('(') || za.starts_with('{')) {
+                return Some(name.clone());
+            }
+            od = konec;
+        }
+    }
+    None
+}
+
 /// Vytáhne z odpovědi volání nástrojů a zbytek nechá jako text.
 pub fn parse_response(text: &str) -> ParsedResponse {
     let mut out = ParsedResponse::default();
@@ -167,6 +199,63 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // --- volání prózou ---
+
+    fn nastroje() -> Vec<String> {
+        vec!["report_finding".to_string(), "read_file".to_string()]
+    }
+
+    /// Přesně tohle poslala Gemma při review `src/token.rs`. Chybu našla
+    /// i popsala, ale zápis byl volání funkce místo bloku `<tool>`, takže se
+    /// nález ztratil.
+    #[test]
+    fn volani_funkci_se_pozna() {
+        let text = r#"report_finding(file="src/token.rs", severity="medium", summary="…")"#;
+        assert_eq!(
+            tool_called_as_prose(text, &nastroje()),
+            Some("report_finding".to_string())
+        );
+    }
+
+    #[test]
+    fn slozene_zavorky_taky() {
+        assert_eq!(
+            tool_called_as_prose(r#"read_file {"path": "src/main.rs"}"#, &nastroje()),
+            Some("read_file".to_string())
+        );
+    }
+
+    #[test]
+    fn pouha_zminka_jmena_neni_volani() {
+        // Tohle je legitimní věta v shrnutí a nesmí spustit připomínku formátu.
+        assert_eq!(
+            tool_called_as_prose("Nálezy jsem nahlásil přes report_finding.", &nastroje()),
+            None
+        );
+        assert_eq!(
+            tool_called_as_prose("Použij read_file nebo grep.", &nastroje()),
+            None
+        );
+    }
+
+    #[test]
+    fn jmeno_uvnitr_delsiho_slova_se_nepocita() {
+        assert_eq!(
+            tool_called_as_prose("moje_report_finding(x)", &nastroje()),
+            None
+        );
+    }
+
+    #[test]
+    fn spravne_volani_prochazi_parserem_a_ne_touhle_zachranou() {
+        // Blok `<tool>` se rozebere normálně; tahle pojistka na něj nesmí
+        // sahat, jinak by se každé správné volání hlásilo jako chyba formátu.
+        let text = r#"<tool>{"name":"report_finding","arguments":{}}</tool>"#;
+        let parsed = parse_response(text);
+        assert!(parsed.wants_tools());
+        assert_eq!(tool_called_as_prose(&parsed.prose, &nastroje()), None);
+    }
 
     // --- co má projít ---
 
