@@ -45,6 +45,8 @@ pub enum EditError {
     NoChange,
     /// Prázdný `old_text` — nahradilo by se „nic" a nešlo by poznat kde.
     EmptyTarget,
+    /// V jednom plánu se sešlo víc souborů, než kolik jde rozumně projít.
+    TooManyFiles { limit: usize },
 }
 
 impl std::fmt::Display for EditError {
@@ -72,6 +74,12 @@ impl std::fmt::Display for EditError {
             Self::EmptyTarget => write!(
                 f,
                 "Prázdný old_text nejde nahradit. Uveď úsek, který se má změnit."
+            ),
+            Self::TooManyFiles { limit } => write!(
+                f,
+                "Najednou čeká na schválení {limit} souborů, což je strop. \
+                 Dodej nejdřív jádro projektu; zbytek přidáme, až tohle uživatel \
+                 potvrdí."
             ),
         }
     }

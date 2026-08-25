@@ -1,5 +1,5 @@
 import { createEffect, createSignal, Show } from "solid-js";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 interface Props {
   workspacePath: string | null;
@@ -11,6 +11,8 @@ interface Props {
   onSend: (text: string) => void;
   onCancel: () => void;
   onWorkspaceChange: (path: string | null) => void;
+  /** Založit novou složku projektu a otevřít ji. */
+  onWorkspaceCreate: (path: string) => void;
   onReview: () => void;
   /**
    * Text k vložení do pole. Nese se jako objekt schválně: vložit se má
@@ -44,6 +46,23 @@ export function Composer(props: Props) {
     });
     if (typeof vybrano === "string") {
       props.onWorkspaceChange(vybrano);
+    }
+  };
+
+  /**
+   * Nový projekt: vybere se **nadřazená** složka a název se dopíše.
+   *
+   * Přes výběr složky by to nešlo — ta, kterou chce uživatel založit, ještě
+   * neexistuje, takže není co vybrat. Dialog na uložení souboru umí zadat
+   * jméno, které tam zatím není, a to je přesně ono.
+   */
+  const zalozitProjekt = async () => {
+    const vybrano = await save({
+      title: "Kam založit nový projekt",
+      defaultPath: props.workspacePath ?? undefined,
+    });
+    if (typeof vybrano === "string") {
+      props.onWorkspaceCreate(vybrano);
     }
   };
 
@@ -93,6 +112,16 @@ export function Composer(props: Props) {
             <span class="workspace-name">{props.workspaceName}</span>
           </Show>
         </button>
+
+        <Show when={!props.workspacePath}>
+          <button
+            class="ghost new-project"
+            onClick={zalozitProjekt}
+            title="Založit novou složku a nechat si do ní připravit projekt"
+          >
+            Nový projekt…
+          </button>
+        </Show>
 
         <Show when={props.workspacePath}>
           <button

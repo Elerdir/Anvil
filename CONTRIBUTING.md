@@ -68,6 +68,7 @@ odchytit ruční běh:
 scripts\smoke.bat D:\models\model.gguf        # dvě kola konverzace + kontroly
 scripts\prefill.bat D:\models\model.gguf      # rychlost zpracování promptu
 scripts\review.bat D:\models\model.gguf fixtures\vadny-projekt   # kolik chyb najde
+scripts\oprava.bat D:\models\model.gguf fixtures\vadny-projekt   # kolik jich opraví
 ```
 
 Když se sahá na `ai/llama_engine.rs`, `ai/chat_template.rs`, `ai/offload_plan.rs`
@@ -80,6 +81,11 @@ Když se sahá na `review.rs`, `agent/runner.rs` nebo `agent/tools.rs`, pusť
 zasazených vad model našel**. Skriptované testy ověřují, že smyčka funguje;
 jestli je k něčemu, se pozná jenom takhle. Číslo kolísá mezi běhy, takže pokles
 o jednu vadu ještě nic neznamená — pokles na polovinu ano.
+
+U změn v `edits.rs`, `domain/edit.rs` nebo v nástrojích na zápis pusť `oprava`.
+Měří to jedinou věc, kterou skriptovaný dvojník změřit nemůže: jestli model
+dokáže zopakovat `old_text` **přesně** včetně odsazení. Když ne, úprava se
+bezpečně odmítne — a je k ničemu.
 
 **macOS.** Zatím ho nikdo nespustil. Než se to změní, ber každou změnu
 v `#[cfg]` větvích jako neověřenou.

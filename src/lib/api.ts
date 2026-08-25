@@ -215,6 +215,9 @@ export const api = {
   unloadModel: () => call<SessionView>("unload_model"),
 
   setWorkspace: (path: string | null) => call<SessionView>("set_workspace", { path }),
+  /** Otevře složku a chybějící založí — pro nový projekt. */
+  createWorkspace: (path: string) =>
+    call<SessionView>("set_workspace", { path, create: true }),
 
   getSession: () => call<SessionView>("get_session"),
   newConversation: () => call<SessionView>("new_conversation"),

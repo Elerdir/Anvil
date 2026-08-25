@@ -20,14 +20,24 @@ Windows a macOS (Apple Silicon i Intel).
 - Modely už na disku se najdou a znovu nestahují
 - **Automatické slučování kontextu** — délka konverzace nenaráží na limit okna
 - Token HuggingFace v systémovém úložišti, ukládá se až po ověření
+- **Větvení konverzace** — z každé zprávy jde založit nové vlákno
+- **Code review** — projde se soubor po souboru; které soubory, rozhoduje kód, ne model
+- **Úpravy souborů** — model je navrhne, ty vidíš diff a rozhoduješ; bez potvrzení se nezapíše nic
+- **Nový projekt** — do prázdné složky si necháš připravit skelet
 
-## Co se chystá
+## Kde jsou hranice
 
-| Fáze | Co |
-|---|---|
-| 3 | Větvení konverzace |
-| 4 | Úpravy souborů s náhledem diffu a potvrzením |
-| 5 | Vytvoření projektu od nuly |
+Měřeno na Gemma 4 26B-A4B nad projektem se šesti známými chybami
+(`fixtures/vadny-projekt`):
+
+- **Najde 4 ze 6.** Chyby popisuje správně a se správným řádkem, včetně
+  bezpečnostních. Občas přidá nález, který chybou není — počítej s tím, že
+  něco zamítneš.
+- **Review souboru trvá desítky sekund.** Osm souborů zabralo tři minuty;
+  u velkého projektu zúž zadání vzorem cesty.
+- **Chyba viditelná až ze souvislosti dvou souborů takhle neprojde.** Na to
+  je běžný chat nad otevřenou složkou, kde má model nástroje k dispozici.
+- **macOS zatím nikdo nespustil.** Kód pro Metal je napsaný, ne ověřený.
 
 ## Spuštění
 
