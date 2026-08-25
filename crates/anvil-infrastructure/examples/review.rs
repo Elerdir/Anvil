@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Plán:     {}", engine.plan_description());
     println!();
 
-    let workspace = Workspace::new(koren)?;
+    let workspace = Workspace::new(koren.clone())?;
     let fs: Arc<dyn WorkspaceFs> = Arc::new(LocalWorkspaceFs::new(workspace)?);
     // Kopie pro závěrečné kontroly — `run` si `fs` odnese.
     let fs_pro_kontrolu = fs.clone();
@@ -206,8 +206,146 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  vygenerováno:{} tokenů", outcome.generated_tokens);
     println!("  celkem:      {:.1} s", bezi.elapsed().as_secs_f64());
 
+    // Seznam vsech souboru se pouziva na dvou mistech nize.
+    let vsechny: Vec<String> = fs_pro_kontrolu
+        .list(None)
+        .await
+        .unwrap_or_default()
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+
+    // --- srovnání se známými vadami ---------------------------------------
+    //
+    // Bez tohohle se nedá odlišit „projekt je čistý“ od „model chyby nenajde“.
+    // Nad `anvil-domain` skončily tři běhy po sobě prakticky bez nálezu a
+    // z toho neplyne nic — dokud není po ruce kód, o kterém se ví, co v něm
+    // je, měří se jenom to, že smyčka doběhla.
+    //
+    // Klíč leží **vedle** kontrolované složky, ne v ní. Uvnitř by si ho model
+    // přečetl `read_file` a test by měřil jeho schopnost číst zadání.
+    let klic = koren.parent().map(|p| {
+        p.join(format!(
+            "{}-nalezy.json",
+            koren.file_name().unwrap_or_default().to_string_lossy()
+        ))
+    });
+    let ocekavane = klic
+        .filter(|p| p.is_file())
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+
+    let mut nenalezene: Vec<String> = Vec::new();
+    if let Some(klic) = &ocekavane {
+        let vady = klic["vady"].as_array().cloned().unwrap_or_default();
+
+        // Párování je **jedna ku jedné**. První verze tuhle podmínku neměla
+        // a jeden nález obsloužil dvě různé vady: hláška „ignoruje poslední
+        // úlohu" obsahovala slovo „poslední", takže si připsala i vadu
+        // `posledni() vrací first()` o deset řádků níž, kterou model vůbec
+        // nenahlásil. Skóre pak ukázalo 5 ze 6 místo 3 ze 6 — měřidlo, které
+        // nadhodnocuje, je horší než žádné, protože se podle něj rozhoduje.
+        let mut obsazeny: Vec<bool> = vec![false; report.findings.len()];
+
+        println!("\n=== Známé vady ({}) ===", vady.len());
+        for vada in &vady {
+            let soubor = vada["soubor"].as_str().unwrap_or_default();
+            let radek = vada["radek"].as_u64().unwrap_or(0) as u32;
+            let nazev = vada["nazev"].as_str().unwrap_or_default();
+            let slova: Vec<String> = vada["klicova_slova"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|s| s.as_str())
+                        .map(str::to_lowercase)
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Kvalita shody, menší je lepší. Řádek rozhoduje přednostně;
+            // popis se bere jen tehdy, když sedí **aspoň dvě** klíčová slova.
+            // Na jedno se chytne kdejaká věta — „čas" je v hlášce o systémovém
+            // čase i ve vadě o expiraci tokenu, a přitom jde o dvě různé věci.
+            let mut nejlepsi: Option<(usize, u32)> = None;
+            for (i, f) in report.findings.iter().enumerate() {
+                if obsazeny[i] || f.file.as_str() != soubor {
+                    continue;
+                }
+                let text = format!("{} {}", f.summary, f.detail).to_lowercase();
+                let shod = slova.iter().filter(|s| text.contains(s.as_str())).count();
+
+                let kvalita = match f.line {
+                    Some(l) if l.abs_diff(radek) <= 8 => l.abs_diff(radek),
+                    // Bez řádku (nebo daleko od něj) rozhoduje jen popis.
+                    _ if shod >= 2 => 100,
+                    _ => continue,
+                };
+                if nejlepsi.is_none_or(|(_, k)| kvalita < k) {
+                    nejlepsi = Some((i, kvalita));
+                }
+            }
+
+            match nejlepsi {
+                Some((i, _)) => {
+                    obsazeny[i] = true;
+                    println!("  ✓ {soubor}:{radek} — {nazev}");
+                }
+                None => {
+                    println!("  ✗ {soubor}:{radek} — {nazev}");
+                    nenalezene.push(format!("{soubor}:{radek} ({nazev})"));
+                }
+            }
+        }
+        println!("  našel {} z {}", vady.len() - nenalezene.len(), vady.len());
+
+        // Nálezy, které nesedí na žádnou zasazenou vadu. Nemusí to být šum —
+        // v kódu můžou být i chyby, o kterých nevím — ale je potřeba je vidět,
+        // protože samotné „našel 3 ze 6" o přesnosti neříká nic.
+        let navic: Vec<String> = report
+            .findings
+            .iter()
+            .zip(&obsazeny)
+            .filter(|(_, o)| !**o)
+            .map(|(f, _)| format!("{} — {}", f.location(), f.summary))
+            .collect();
+        if !navic.is_empty() {
+            println!("  mimo klíč ({}):", navic.len());
+            for n in &navic {
+                println!("      {n}");
+            }
+        }
+    }
+
     // --- kontroly, které jednotkové testy neudělají ------------------------
     let mut problemy: Vec<String> = Vec::new();
+
+    if let Some(klic) = &ocekavane {
+        let celkem = klic["vady"].as_array().map(Vec::len).unwrap_or(0);
+        let naslo = celkem - nenalezene.len();
+        // Půlka je hranice smířlivá: jde o to poznat, jestli je nástroj
+        // k něčemu, ne jestli je dokonalý.
+        if celkem > 0 && naslo * 2 < celkem {
+            problemy.push(format!(
+                "Ze {celkem} známých vad model našel {naslo}. Nenašel: {}.",
+                nenalezene.join("; ")
+            ));
+        }
+    }
+
+    // „Nic jsem nenašel“ po dvou přečtených souborech ze čtrnácti není
+    // výsledek, je to předčasný konec. Sedí to i na běh, který jinak projde
+    // všemi ostatními kontrolami — přesně to se stalo napotřetí.
+    if report.findings.is_empty() && !vsechny.is_empty() {
+        let podil = report.files_read.len() * 100 / vsechny.len();
+        if podil < 25 {
+            problemy.push(format!(
+                "Model prohlásil projekt za čistý, ale otevřel {} z {} souborů ({podil} %). \
+                 Na takovém vzorku „nic jsem nenašel“ nic neznamená.",
+                report.files_read.len(),
+                vsechny.len()
+            ));
+        }
+    }
 
     if volani_celkem == 0 {
         problemy.push(
@@ -252,15 +390,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // čte právě tohle shrnutí.
     //
     // Porovnává se proti skutečným cestám v projektu, ne proti tomu, co v textu
-    // vypadá jako cesta — z „např. `src/model.rs`" se tak nedá vyrobit planý
+    // vypadá jako cesta — z „např. `src/model.rs`“ se tak nedá vyrobit planý
     // poplach kvůli zkratce nebo interpunkci.
-    let vsechny: Vec<String> = fs_pro_kontrolu
-        .list(None)
-        .await
-        .unwrap_or_default()
-        .iter()
-        .map(|p| p.to_string())
-        .collect();
     let zminene_neprectene: Vec<&String> = vsechny
         .iter()
         .filter(|p| outcome.summary.contains(p.as_str()) && !precteno.contains(&p.as_str()))

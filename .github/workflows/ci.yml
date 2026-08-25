@@ -65,8 +65,12 @@ jobs:
       # se proti reálnému modelu přes `examples/smoke`, což na CI nejde).
       # Smysl téhle úlohy je chytit, že se kód rozešel s API llama-cpp-2 —
       # bez ní by se to zjistilo až při lokálním buildu.
+      # `--examples` je tam schválně: bez něj se `smoke` ani `review` nepřeloží,
+      # protože `cargo check` příklady sám nestaví. Rozbitý harness pak projde
+      # CI a zjistí se to až při ručním spuštění proti modelu — což už jednou
+      # bylo, kvůli obyčejné uvozovce uvnitř řetězce.
       - name: cargo check --features engine
-        run: cargo check -p anvil-infrastructure --features engine
+        run: cargo check -p anvil-infrastructure --features engine --examples --lib
 
   frontend:
     name: Frontend — typy a build

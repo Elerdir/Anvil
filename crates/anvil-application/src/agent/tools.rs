@@ -79,7 +79,7 @@ impl Tool for ListFiles {
     async fn call(&self, args: &Value) -> ToolResult {
         let glob = text_arg(args, "glob");
         match self.fs.list(glob).await {
-            // Holé „nic" model přečte jako „projekt je prázdný" a zařídí se
+            // Holé „nic“ model přečte jako „projekt je prázdný“ a zařídí se
             // podle toho. Když je prázdný jen výsledek filtru, musí to být
             // ze zprávy poznat — jinak si model odnese nepravdu, kterou už
             // nemá jak vyvrátit.
@@ -87,7 +87,7 @@ impl Tool for ListFiles {
                 Some(g) => {
                     let celkem = self.fs.list(None).await.map(|v| v.len()).unwrap_or(0);
                     ToolResult::ok(format!(
-                        "Vzoru „{g}\" neodpovídá žádný soubor. Projekt jich má {celkem} — \
+                        "Vzoru „{g}“ neodpovídá žádný soubor. Projekt jich má {celkem} — \
                          zkus jiný vzor, nebo list_files bez vzoru."
                     ))
                 }
@@ -235,22 +235,22 @@ impl Tool for Grep {
 
         let glob = text_arg(args, "glob");
         match self.fs.grep(pattern, glob).await {
-            // „Nikde se nevyskytuje" je tvrzení o celém projektu. Když se
+            // „Nikde se nevyskytuje“ je tvrzení o celém projektu. Když se
             // přitom hledalo jen ve výseku — nebo v ničem, protože vzor
             // nesedl — je to lež, kterou model vezme za svou.
             Ok(hits) if hits.is_empty() => {
                 let prohledano = self.fs.list(glob).await.map(|v| v.len()).unwrap_or(0);
                 ToolResult::ok(match (glob, prohledano) {
                     (Some(g), 0) => format!(
-                        "Vzoru „{g}\" neodpovídá žádný soubor, takže se „{pattern}\" \
+                        "Vzoru „{g}“ neodpovídá žádný soubor, takže se „{pattern}“ \
                          nehledalo nikde. Zkus jiný vzor."
                     ),
                     (Some(g), n) => format!(
-                        "„{pattern}\" se nevyskytuje v žádném z {n} souborů, \
-                         které odpovídají vzoru „{g}\"."
+                        "„{pattern}“ se nevyskytuje v žádném z {n} souborů, \
+                         které odpovídají vzoru „{g}“."
                     ),
                     (None, n) => {
-                        format!("„{pattern}\" se nevyskytuje v žádném z {n} souborů projektu.")
+                        format!("„{pattern}“ se nevyskytuje v žádném z {n} souborů projektu.")
                     }
                 })
             }
@@ -560,7 +560,7 @@ mod tests {
     }
 
     /// Prázdný výsledek filtru se nesmí dát splést s prázdným projektem —
-    /// skutečný model si z „žádný soubor" odnesl, že projekt nic neobsahuje.
+    /// skutečný model si z „žádný soubor“ odnesl, že projekt nic neobsahuje.
     #[tokio::test]
     async fn list_bez_shody_rekne_i_kolik_souboru_projekt_ma() {
         let r = ListFiles::new(fs()).call(&json!({"glob": "*.py"})).await;
@@ -574,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_bez_zasahu_rekne_kde_hledal() {
-        // „Nikde se nevyskytuje" je tvrzení o celém projektu. Když se
+        // „Nikde se nevyskytuje“ je tvrzení o celém projektu. Když se
         // hledalo jen ve výseku, musí to být ze zprávy poznat.
         let r = Grep::new(fs())
             .call(&json!({"pattern": "neexistuje", "glob": "*.rs"}))

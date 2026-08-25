@@ -1,0 +1,99 @@
+{
+  "popis": "Klíč k projektu `vadny-projekt`. Leží schválně VEDLE složky, ne v ní — kdyby byl uvnitř, model by si ho přečetl a test by neměřil nic.",
+  "vady": [
+    {
+      "soubor": "src/config.rs",
+      "radek": 25,
+      "nazev": "casti[1] spadne na řádku bez rovnítka",
+      "proc": "splitn(2, '=') vrátí jednoprvkový vektor, když na řádku rovnítko není. Stačí překlep v konfiguraci a server při startu spadne.",
+      "klicova_slova": [
+        "casti[1]",
+        "spadn",
+        "rovnítk",
+        "out of bounds",
+        "splitn"
+      ]
+    },
+    {
+      "soubor": "src/uloziste.rs",
+      "radek": 21,
+      "nazev": "Jméno z HTTP requestu se připojí ke kořeni bez kontroly",
+      "proc": "join s `../../etc/passwd` vyleze z úložiště. Zápis i mazání pak sahá kamkoli na disk.",
+      "klicova_slova": [
+        "traversal",
+        "../",
+        "cest",
+        "koren",
+        "kořen",
+        "validac",
+        "bezpe",
+        "úniku",
+        "uniku"
+      ]
+    },
+    {
+      "soubor": "src/relace.rs",
+      "radek": 34,
+      "nazev": "Selhání zápisu relací se tiše zahodí přes let _ =",
+      "proc": "Když se relace nepodaří uložit, nikdo se to nedozví a po restartu jsou uživatelé odhlášení bez jediné stopy v logu.",
+      "klicova_slova": [
+        "let _",
+        "ignor",
+        "tiše",
+        "tise",
+        "zahoz",
+        "zahod",
+        "io::Result",
+        "nekontrol"
+      ]
+    },
+    {
+      "soubor": "src/fronta.rs",
+      "radek": 34,
+      "nazev": "len() - 1 podteče na prázdné frontě a poslední úloha se přeskočí",
+      "proc": "Na prázdné frontě je len() - 1 na usize podtečení a panika. A i s daty cyklus vynechá poslední položku, kterou pak clear() zahodí nezpracovanou.",
+      "klicova_slova": [
+        "len() - 1",
+        "len()-1",
+        "podtec",
+        "podteč",
+        "underflow",
+        "prázdn",
+        "prazdn",
+        "poslední",
+        "posledni",
+        "off-by-one",
+        "přeskoč",
+        "preskoc"
+      ]
+    },
+    {
+      "soubor": "src/fronta.rs",
+      "radek": 44,
+      "nazev": "posledni() vrací first()",
+      "proc": "Funkce dělá pravý opak toho, co slibuje jméno i doc komentář.",
+      "klicova_slova": [
+        "posledni",
+        "poslední",
+        "first",
+        "last",
+        "opak"
+      ]
+    },
+    {
+      "soubor": "src/token.rs",
+      "radek": 38,
+      "nazev": "je_platny nekontroluje vypršení platnosti",
+      "proc": "Porovná se jen hodnota, vyprsi_v se ignoruje. Token po expiraci projde, dokud někdo nezavolá uklid().",
+      "klicova_slova": [
+        "vyprsi",
+        "vypršel",
+        "vyprsel",
+        "expir",
+        "platnost",
+        "je_platny",
+        "SystemTime"
+      ]
+    }
+  ]
+}
