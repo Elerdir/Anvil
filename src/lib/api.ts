@@ -131,6 +131,24 @@ export interface ReviewReportView {
 }
 
 /** Co model právě dělá. Bez toho uživatel kouká minuty na prázdné okno. */
+export type DiffLine =
+  | { kind: "context"; line: number; text: string }
+  | { kind: "removed"; line: number; text: string }
+  | { kind: "added"; text: string };
+
+/** Navržená úprava, která čeká na schválení. Na disku ještě není. */
+export interface PendingEditView {
+  path: string;
+  headline: string;
+  lines: DiffLine[];
+  added: number;
+  removed: number;
+  createsFile: boolean;
+  /** Náhled je zkrácený — u velké změny se ukáže jen začátek. */
+  truncated: boolean;
+  edits: number;
+}
+
 export type AgentEventView =
   | { kind: "round"; round: number }
   | { kind: "tool_called"; name: string; summary: string }
@@ -218,6 +236,11 @@ export const api = {
 
   sendMessage: (text: string) => call<SessionView>("send_message", { text }),
   cancelGeneration: () => call<boolean>("cancel_generation"),
+
+  pendingEdits: () => call<PendingEditView[]>("pending_edits"),
+  /** Zapíše schválené soubory. Jediná cesta, kudy se model dostane na disk. */
+  applyEdits: (paths: string[]) => call<string[]>("apply_edits", { paths }),
+  discardEdits: (paths: string[] | null) => call<void>("discard_edits", { paths }),
 
   runReview: (focus: string | null) => call<ReviewReportView>("run_review", { focus }),
   listTools: () => call<string[]>("list_tools"),

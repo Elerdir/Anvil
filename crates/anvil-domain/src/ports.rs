@@ -302,6 +302,18 @@ pub trait WorkspaceFs: Send + Sync {
     /// Najde vzor v souborech.
     async fn grep(&self, pattern: &str, glob: Option<&str>) -> DomainResult<Vec<GrepHit>>;
 
+    /// Celý obsah souboru. `None`, když soubor neexistuje.
+    ///
+    /// Proti [`WorkspaceFs::read`] nic neořezává — z ořezaného textu se nedá
+    /// spočítat úprava, protože by se zahodil zbytek souboru.
+    async fn read_whole(&self, path: &RelativePath) -> DomainResult<Option<String>>;
+
+    /// Zapíše soubor. Chybějící složky se vytvoří.
+    ///
+    /// Volá se **až po schválení uživatelem** — porty o tom nic neví, ale
+    /// jediná cesta sem vede přes příkaz, který uživatel spustí ručně.
+    async fn write(&self, path: &RelativePath, content: &str) -> DomainResult<()>;
+
     fn limits(&self) -> FsLimits;
 }
 

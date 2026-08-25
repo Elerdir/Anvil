@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anvil_application::ChatService;
+use anvil_application::{agent::tools::SharedPlan, ChatService};
 use anvil_domain::{
     conversation::Conversation,
     error::{DomainError, DomainResult},
@@ -33,6 +33,11 @@ pub struct Session {
     pub workspace: Option<Workspace>,
     /// Token právě běžícího generování nebo stahování.
     pub cancel: Option<CancellationToken>,
+    /// Návrhy úprav, které čekají na schválení uživatelem.
+    ///
+    /// Drží se v session, ne v plánu na jeden tah: mezi návrhem a schválením
+    /// může uživatel klidně napsat další zprávu a nesmí tím o návrhy přijít.
+    pub edits: SharedPlan,
     /// Právě běží generování.
     ///
     /// Bez téhle pojistky by dvě souběžná odeslání ztratila historii:

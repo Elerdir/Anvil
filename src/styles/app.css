@@ -897,3 +897,140 @@
   border: none;
   padding: 0;
 }
+
+/* --- Navržené úpravy ---------------------------------------------------- */
+
+.edits {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 12px 20px 0;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.edits-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+}
+
+.edits-title {
+  display: block;
+  font-weight: 600;
+}
+
+.edits-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.edits-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.edit {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+
+/* Odmítnutá úprava zůstane vidět, jen ustoupí — ať je poznat, co se nezapíše. */
+.edit.odmitnuty {
+  opacity: 0.45;
+}
+
+.edit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.edit-pick code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edit-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.edit-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-3);
+  color: var(--text-dim);
+}
+
+.edit-plus {
+  color: var(--ok, #3fb950);
+}
+
+.edit-minus {
+  color: var(--danger, #f85149);
+}
+
+.diff {
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.diff-line {
+  display: flex;
+  gap: 8px;
+  padding: 0 12px;
+  white-space: pre;
+}
+
+.diff-num {
+  min-width: 3.5ch;
+  text-align: right;
+  color: var(--text-dim);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.diff-mark {
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.diff-added {
+  background: color-mix(in srgb, var(--ok, #3fb950) 14%, transparent);
+}
+
+.diff-removed {
+  background: color-mix(in srgb, var(--danger, #f85149) 14%, transparent);
+}
+
+.edit-warning {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  border-top: 1px solid var(--border);
+  color: var(--warn-text, var(--text-dim));
+}

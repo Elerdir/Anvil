@@ -309,6 +309,45 @@ impl WorkspaceFs for LocalWorkspaceFs {
         Ok(out)
     }
 
+    async fn read_whole(&self, path: &RelativePath) -> DomainResult<Option<String>> {
+        match self.resolve(path) {
+            Ok(_) => self.read_text(path).await.map(Some),
+            // Neexistující soubor není chyba — je to odpověď „ještě tam není",
+            // ze které se pozná, že jde o založení nového.
+            Err(DomainError::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn write(&self, path: &RelativePath, content: &str) -> DomainResult<()> {
+        // `resolve` kanonizuje, což u neexistujícího souboru selže. Ověřuje se
+        // proto **složka**, do které se zapisuje: ta existovat musí, nebo se
+        // vytvoří pod už ověřeným rodičem. Bez téhle kontroly by symlink
+        // uvnitř projektu odvedl zápis kamkoli na disk.
+        let cil = self.workspace.resolve(path);
+        let Some(rodic) = cil.parent() else {
+            return Err(DomainError::validation(format!(
+                "{path} nemá nadřazenou složku"
+            )));
+        };
+
+        if !rodic.exists() {
+            std::fs::create_dir_all(rodic)
+                .map_err(|e| DomainError::storage(format!("{path}: složku nejde vytvořit: {e}")))?;
+        }
+        let rodic = std::fs::canonicalize(rodic)
+            .map_err(|e| DomainError::storage(format!("{path}: {e}")))?;
+        if !rodic.starts_with(&self.root) {
+            return Err(DomainError::validation(format!(
+                "cesta {path} vede přes odkaz mimo složku projektu"
+            )));
+        }
+
+        tokio::fs::write(&cil, content)
+            .await
+            .map_err(|e| DomainError::storage(format!("{path} nejde zapsat: {e}")))
+    }
+
     fn limits(&self) -> FsLimits {
         self.limits
     }
@@ -594,6 +633,101 @@ mod tests {
 
         let e = p.fs.read(&cesta("odkaz"), None, None).await.unwrap_err();
         assert!(e.to_string().contains("mimo složku projektu"), "{e}");
+    }
+
+    // --- zápis ---
+
+    #[tokio::test]
+    async fn zapis_a_zpetne_precteni() {
+        let p = prostredi();
+        p.fs.write(&cesta("src/novy.rs"), "obsah\n").await.unwrap();
+
+        assert_eq!(
+            p.fs.read_whole(&cesta("src/novy.rs")).await.unwrap(),
+            Some("obsah\n".to_string())
+        );
+        assert_eq!(
+            std::fs::read_to_string(p.root.join("src/novy.rs")).unwrap(),
+            "obsah\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn zapis_zalozi_chybejici_slozky() {
+        let p = prostredi();
+        p.fs.write(&cesta("a/b/c/hluboko.txt"), "x").await.unwrap();
+        assert!(p.root.join("a/b/c/hluboko.txt").is_file());
+    }
+
+    #[tokio::test]
+    async fn cely_obsah_se_neorezava() {
+        // `read` ořezává na limit řádků; z toho by se úprava spočítat nedala,
+        // protože by se zahodil zbytek souboru.
+        let p = prostredi();
+        let dlouhy: String = (0..1000).map(|i| format!("radek {i}\n")).collect();
+        p.fs.write(&cesta("dlouhy.txt"), &dlouhy).await.unwrap();
+
+        let cely =
+            p.fs.read_whole(&cesta("dlouhy.txt"))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(cely.lines().count(), 1000);
+    }
+
+    #[tokio::test]
+    async fn neexistujici_soubor_neni_chyba_ale_none() {
+        let p = prostredi();
+        assert_eq!(p.fs.read_whole(&cesta("neni.txt")).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn zapis_mimo_workspace_neprojde_uz_v_domene() {
+        // Lexikální obrana platí pro zápis stejně jako pro čtení.
+        assert!(RelativePath::parse("../mimo.txt").is_err());
+        assert!(RelativePath::parse("/etc/passwd").is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn zapis_pres_odkaz_ven_neprojde() {
+        // Zápis je nebezpečnější než čtení: přes odkaz by se přepsal cizí
+        // soubor. Kontroluje se složka, protože cíl ještě nemusí existovat.
+        let p = prostredi();
+        let mimo = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(mimo.path(), p.root.join("odkaz")).unwrap();
+
+        let e =
+            p.fs.write(&cesta("odkaz/podvrzeny.txt"), "x")
+                .await
+                .unwrap_err();
+        assert!(e.to_string().contains("mimo složku projektu"), "{e}");
+        assert!(
+            !mimo.path().join("podvrzeny.txt").exists(),
+            "soubor se přesto zapsal"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn zapis_pres_odkaz_ven_neprojde() {
+        let p = prostredi();
+        let mimo = tempfile::tempdir().unwrap();
+
+        if std::os::windows::fs::symlink_dir(mimo.path(), p.root.join("odkaz")).is_err() {
+            eprintln!("symlink nejde vytvořit (chybí oprávnění) — test přeskočen");
+            return;
+        }
+
+        let e =
+            p.fs.write(&cesta("odkaz/podvrzeny.txt"), "x")
+                .await
+                .unwrap_err();
+        assert!(e.to_string().contains("mimo složku projektu"), "{e}");
+        assert!(
+            !mimo.path().join("podvrzeny.txt").exists(),
+            "soubor se přesto zapsal"
+        );
     }
 
     #[tokio::test]

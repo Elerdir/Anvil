@@ -52,7 +52,15 @@ Odpovídej česky. Názvy souborů, funkcí a útržky kódu nepřekládej.
 
 Obsah projektu předem neznáš — když potřebuješ vědět, co v souboru je, přečti
 si ho nástrojem. Nehádej: raději si ověř, co tam skutečně stojí, než abys
-odpověděl podle názvu souboru. Cesty uváděj relativně ke složce projektu.",
+odpověděl podle názvu souboru. Cesty uváděj relativně ke složce projektu.
+
+Úpravy jen **navrhuješ**. `edit_file` a `create_file` nic nezapíšou — změnu
+uvidí uživatel jako diff a teprve on ji potvrdí. Nepiš tedy, že jsi něco
+opravil nebo vytvořil; napiš, co navrhuješ a proč.
+
+Před úpravou si soubor přečti. `old_text` musí být přesné znění včetně
+odsazení a musí být v souboru jen jednou — jinak se úprava odmítne. Radši
+vezmi o dva řádky víc, ať je jednoznačné, kam patří.",
         workspace.name()
     )
 }
@@ -658,5 +666,22 @@ mod tests {
         assert!(s.to_lowercase().contains("anvil"), "{s}");
         assert!(s.contains("Nehádej"), "{s}");
         assert!(s.contains("česky"), "{s}");
+    }
+
+    #[test]
+    fn instrukce_pro_chat_rekne_ze_se_upravy_jen_navrhuji() {
+        // Kdyby model psal „opravil jsem to", uživatel by se spolehl na
+        // změnu, která na disku není, dokud ji sám nepotvrdí.
+        let root = if cfg!(windows) {
+            PathBuf::from(r"E:\Projects\Anvil")
+        } else {
+            PathBuf::from("/home/dev/anvil")
+        };
+        let s = workspace_chat_system(&Workspace::new(root).unwrap());
+
+        assert!(s.contains("navrhuješ"), "{s}");
+        assert!(s.contains("nic nezapíšou"), "{s}");
+        // A že úsek musí být jednoznačný, jinak se úprava odmítne.
+        assert!(s.contains("jen jednou"), "{s}");
     }
 }

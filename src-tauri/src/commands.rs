@@ -13,6 +13,7 @@ use anvil_application::{
 };
 use anvil_domain::{
     conversation::Conversation,
+    edit::DiffLine,
     error::{DomainError, DomainResult},
     history,
     id::{ConversationId, MessageId},
@@ -20,7 +21,7 @@ use anvil_domain::{
     ports::{ChatEngine, DownloadProgress, GenerationProgress, ModelProvisioner, SecretKey},
     review::Severity,
     tool::ToolSpec,
-    workspace::Workspace,
+    workspace::{RelativePath, Workspace},
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -827,6 +828,93 @@ pub async fn run_review(
     })
 }
 
+// --- Úpravy souborů -------------------------------------------------------
+
+/// Čeká na schválení. Ukazuje se jako diff.
+#[derive(Debug, Serialize)]
+pub struct PendingEditView {
+    pub path: String,
+    pub headline: String,
+    pub lines: Vec<DiffLine>,
+    pub added: u32,
+    pub removed: u32,
+    pub creates_file: bool,
+    /// Náhled je zkrácený — u velké změny se ukáže jen začátek.
+    pub truncated: bool,
+    /// Kolik úprav se na tomhle souboru sešlo.
+    pub edits: u32,
+}
+
+/// Návrhy, které čekají na rozhodnutí uživatele.
+#[tauri::command]
+pub async fn pending_edits(state: State<'_, AppState>) -> CommandResult<Vec<PendingEditView>> {
+    let plan = state.session.lock().await.edits.clone();
+    let plan = plan.lock().await;
+
+    Ok(plan
+        .changes()
+        .iter()
+        .map(|zmena| {
+            let nahled = zmena.preview();
+            PendingEditView {
+                path: nahled.path.to_string(),
+                headline: nahled.headline(),
+                added: nahled.added,
+                removed: nahled.removed,
+                creates_file: nahled.creates_file,
+                truncated: nahled.truncated,
+                edits: zmena.edits,
+                lines: nahled.lines,
+            }
+        })
+        .collect())
+}
+
+/// Zapíše schválené soubory na disk.
+///
+/// **Jediná cesta, kudy se model dostane k zápisu**, a vede přes tlačítko,
+/// které zmáčkne uživatel poté, co viděl diff.
+#[tauri::command]
+pub async fn apply_edits(
+    state: State<'_, AppState>,
+    paths: Vec<String>,
+) -> CommandResult<Vec<String>> {
+    let (plan, workspace) = {
+        let session = state.session.lock().await;
+        (session.edits.clone(), session.workspace.clone())
+    };
+    let Some(ws) = workspace else {
+        return Err(DomainError::validation("Není otevřená složka projektu.").into());
+    };
+
+    let cesty: Result<Vec<RelativePath>, _> =
+        paths.iter().map(|p| RelativePath::parse(p)).collect();
+    let fs: Arc<dyn anvil_domain::ports::WorkspaceFs> = Arc::new(LocalWorkspaceFs::new(ws)?);
+
+    let zapsane = plan.lock().await.apply(&fs, &cesty?).await?;
+    Ok(zapsane.iter().map(|p| p.to_string()).collect())
+}
+
+/// Zahodí návrhy. Bez `paths` zahodí všechny.
+#[tauri::command]
+pub async fn discard_edits(
+    state: State<'_, AppState>,
+    paths: Option<Vec<String>>,
+) -> CommandResult<()> {
+    let plan = state.session.lock().await.edits.clone();
+    let mut plan = plan.lock().await;
+
+    match paths {
+        Some(paths) => {
+            let cesty: Result<Vec<RelativePath>, _> =
+                paths.iter().map(|p| RelativePath::parse(p)).collect();
+            plan.discard(&cesty?);
+        }
+        None => plan.clear(),
+    }
+    Ok(())
+}
+
 /// Přeposílá kroky smyčky do UI.
 fn agent_events(app: &AppHandle) -> anvil_application::agent::runner::AgentEventCallback {
     let app = app.clone();
@@ -870,7 +958,7 @@ pub async fn send_message(
     // Konverzace se na dobu generování vyjme ze session, aby se nemusel držet
     // zámek přes celý (dlouhý) běh modelu. Druhé odeslání se proto musí
     // odmítnout — jinak by si obě konverzaci vyjmula a na konci přepsala.
-    let (mut conversation, workspace) = {
+    let (mut conversation, workspace, edit_plan) = {
         let mut session = state.session.lock().await;
         if session.generating {
             return Err(DomainError::validation(
@@ -885,6 +973,7 @@ pub async fn send_message(
                 .take()
                 .unwrap_or_else(|| Conversation::new("")),
             session.workspace.clone(),
+            session.edits.clone(),
         )
     };
 
@@ -902,8 +991,13 @@ pub async fn send_message(
             let hooks = AgentHooks::events(agent_events(&app)).with_progress(Some(progress));
             match LocalWorkspaceFs::new(ws.clone()) {
                 Ok(fs) => {
-                    let toolbox =
-                        anvil_application::agent::tools::Toolbox::for_review(Arc::new(fs));
+                    // Sada s návrhem úprav. Zapsat nic neumí — `edit_file`
+                    // jen odloží změnu do plánu, kterou pak uživatel uvidí
+                    // jako diff a buď ji potvrdí, nebo zahodí.
+                    let toolbox = anvil_application::agent::tools::Toolbox::for_editing(
+                        Arc::new(fs),
+                        edit_plan,
+                    );
                     conversation.push(anvil_domain::conversation::Message::user(text.trim()));
                     conversation.derive_title();
 
