@@ -39,6 +39,34 @@ posuzuj mírně, `unwrap()` je v něm běžný a v pořádku.
 Číslo řádku ber z výpisu vlevo. Radši méně nálezů a jistých než seznam
 dohadů.";
 
+/// Instrukce pro **prázdnou** složku — zakládá se nový projekt.
+///
+/// Vlastní zadání, protože v prázdné složce je „přečti si soubor" nesmysl
+/// a model by kolo promarnil hledáním něčeho, co tam není. Naopak potřebuje
+/// vědět, že má napřed říct, co chce založit, a držet se při zemi: strop
+/// [`EditPlan::MAX_FILES`](crate::edits::EditPlan::MAX_FILES) je na to, aby
+/// šlo výsledek projít očima, a rozsáhlý skelet by ho vyčerpal na
+/// konfiguračních souborech.
+pub fn empty_project_system(workspace: &Workspace) -> String {
+    format!(
+        "Jsi zkušený programátor a zakládáš nový projekt ve složce „{}“, která je zatím prázdná.
+
+Odpovídej česky. Názvy souborů, funkcí a útržky kódu nepřekládej.
+
+Nejdřív **jednou větou** napiš, co chceš založit a v čem. Když ze zadání není
+jasné, o jaký jazyk nebo druh aplikace jde, zeptej se místo hádání.
+
+Pak soubory vytvoř nástrojem `create_file`. Drž se **jádra**: manifest
+závislostí, vstupní bod a stručný README. Prázdné složky ani placeholdery
+nezakládej. Kód musí jít rovnou přeložit a spustit — radši méně souborů,
+které fungují, než skelet, ve kterém nic není hotové.
+
+Soubory jen **navrhuješ**. Nic se nezapíše, dokud to uživatel neschválí, tak
+nepiš, že jsi projekt vytvořil; napiš, co navrhuješ.",
+        workspace.name()
+    )
+}
+
 /// Instrukce pro běžný chat nad otevřenou složkou.
 ///
 /// Model nedostane obsah projektu předem — dostane nástroje. Nacpat mu do
@@ -666,6 +694,26 @@ mod tests {
         assert!(s.to_lowercase().contains("anvil"), "{s}");
         assert!(s.contains("Nehádej"), "{s}");
         assert!(s.contains("česky"), "{s}");
+    }
+
+    #[test]
+    fn instrukce_pro_prazdny_projekt_neposilaji_model_cist_soubory() {
+        // V prázdné složce není co číst; „přečti si soubor“ by tam byl
+        // pokyn k promarnění kola.
+        let root = if cfg!(windows) {
+            PathBuf::from(r"E:\Projects\NovyProjekt")
+        } else {
+            PathBuf::from("/home/dev/novyprojekt")
+        };
+        let s = empty_project_system(&Workspace::new(root).unwrap());
+
+        assert!(s.contains("prázdná"), "{s}");
+        assert!(s.contains("create_file"), "{s}");
+        assert!(!s.contains("přečti"), "{s}");
+        // Musí být jasné, že se pořád jen navrhuje.
+        assert!(s.contains("navrhuješ"), "{s}");
+        // A že se má zeptat, když neví, místo aby si jazyk vymyslel.
+        assert!(s.contains("zeptej"), "{s}");
     }
 
     #[test]

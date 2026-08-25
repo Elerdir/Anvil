@@ -8,7 +8,7 @@ use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use anvil_application::{
     agent::runner::{AgentEvent, AgentHooks, AgentLoop},
-    review::{workspace_chat_system, ReviewService},
+    review::{empty_project_system, workspace_chat_system, ReviewService},
     TurnContext,
 };
 use anvil_domain::{
@@ -485,14 +485,26 @@ pub async fn unload_model(state: State<'_, AppState>) -> CommandResult<SessionVi
 
 // --- Workspace ------------------------------------------------------------
 
+/// Otevře složku projektu. `None` ji zavře.
+///
+/// `create` založí chybějící složku. Zapíná se jen u „nového projektu“, kde
+/// je vznik složky přesně to, o co uživatel požádal — u běžného otevření je
+/// neexistující cesta překlep a aplikace se má ozvat, ne mlčky vyrobit
+/// prázdnou složku někde vedle.
 #[tauri::command]
 pub async fn set_workspace(
     state: State<'_, AppState>,
     path: Option<String>,
+    create: Option<bool>,
 ) -> CommandResult<SessionView> {
     let workspace = match path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => {
             let cesta = PathBuf::from(p);
+            if !cesta.exists() && create.unwrap_or(false) {
+                std::fs::create_dir_all(&cesta).map_err(|e| {
+                    DomainError::storage(format!("{} nejde založit: {e}", cesta.display()))
+                })?;
+            }
             if !cesta.is_dir() {
                 return Err(DomainError::validation(format!(
                     "{} není složka nebo neexistuje",
@@ -994,22 +1006,33 @@ pub async fn send_message(
                     // Sada s návrhem úprav. Zapsat nic neumí — `edit_file`
                     // jen odloží změnu do plánu, kterou pak uživatel uvidí
                     // jako diff a buď ji potvrdí, nebo zahodí.
-                    let toolbox = anvil_application::agent::tools::Toolbox::for_editing(
-                        Arc::new(fs),
-                        edit_plan,
-                    );
+                    let fs: Arc<dyn anvil_domain::ports::WorkspaceFs> = Arc::new(fs);
+                    // Prázdná složka = zakládá se projekt. Instrukce „přečti
+                    // si soubor“ by tam byla nesmysl a model by kolo promarnil
+                    // hledáním něčeho, co v ní není.
+                    let prazdna = fs
+                        .list(None)
+                        .await
+                        .map(|soubory| soubory.is_empty())
+                        .unwrap_or(false);
+                    let system = if prazdna {
+                        empty_project_system(ws)
+                    } else {
+                        workspace_chat_system(ws)
+                    };
+
+                    let toolbox =
+                        anvil_application::agent::tools::Toolbox::for_editing(fs, edit_plan);
                     conversation.push(anvil_domain::conversation::Message::user(text.trim()));
                     conversation.derive_title();
 
+                    // Víc tokenů na kolo než u review: obsah zakládaného
+                    // souboru cestuje **uvnitř** volání nástroje, takže
+                    // useknutí uprostřed nerozbije jen text, ale celý JSON
+                    // a kolo se promarní na neplatném volání.
                     AgentLoop::new()
-                        .run(
-                            &mut conversation,
-                            &engine,
-                            &toolbox,
-                            &workspace_chat_system(ws),
-                            cancel,
-                            hooks,
-                        )
+                        .with_max_tokens_per_round(2_048)
+                        .run(&mut conversation, &engine, &toolbox, &system, cancel, hooks)
                         .await
                         .map(|out| anvil_application::SendOutcome {
                             outcome: anvil_domain::ports::CompletionOutcome {

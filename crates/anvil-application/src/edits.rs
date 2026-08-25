@@ -52,6 +52,14 @@ pub struct EditPlan {
 }
 
 impl EditPlan {
+    /// Kolik souborů smí jeden plán obsahovat.
+    ///
+    /// Při zakládání projektu model klidně navrhne strukturu na dvacet
+    /// souborů; třicet je strop, za kterým už to nikdo neprojde očima
+    /// a potvrzovací krok ztrácí smysl. Odmítnutí je hlasité, ne tiché —
+    /// model se dozví, že má napřed dodat jádro.
+    pub const MAX_FILES: usize = 30;
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -99,7 +107,22 @@ impl EditPlan {
             }
         };
 
-        let vysledek = kind.apply(soucasny.as_deref())?;
+        let novy_soubor = !self.changes.iter().any(|c| c.path == path);
+        if novy_soubor && self.changes.len() >= Self::MAX_FILES {
+            return Err(EditError::TooManyFiles {
+                limit: Self::MAX_FILES,
+            });
+        }
+
+        let vysledek = kind.apply(soucasny.as_deref()).map_err(|e| {
+            // „Úsek se v souboru nevyskytuje" je matoucí, když ho model
+            // opsal z disku správně a jen mezitím sám soubor změnil. Ať
+            // z hlášky pozná, že si má přečíst rozpracované znění.
+            match e {
+                EditError::NotFound if !novy_soubor => EditError::NotFoundAfterEdit,
+                jina => jina,
+            }
+        })?;
         let nahled = EditPreview::new(path.clone(), puvodni.as_deref(), &vysledek);
 
         match self.changes.iter_mut().find(|c| c.path == path) {
@@ -352,6 +375,144 @@ mod tests {
 
         assert_eq!(err, EditError::Ambiguous { count: 3 });
         assert!(plan.is_empty(), "odmítnutá úprava se nesmí zapamatovat");
+    }
+
+    /// Přesně tohle se stalo skutečné Gemmě: úspěšně opravila `cesta()`,
+    /// pak poslala tutéž opravu znovu a dostala „úsek se nevyskytuje“.
+    /// Ona ho přitom z disku opsala správně — jen mezitím sama soubor
+    /// změnila a rozpracované znění nevidí.
+    #[tokio::test]
+    async fn opakovana_uprava_rekne_ze_soubor_uz_je_zmeneny() {
+        let fs = fs();
+        let mut plan = EditPlan::new();
+        plan.propose(
+            &fs,
+            cesta("src/main.rs"),
+            nahrad("f().unwrap()", "f().unwrap_or(0)"),
+        )
+        .await
+        .unwrap();
+
+        let err = plan
+            .propose(
+                &fs,
+                cesta("src/main.rs"),
+                nahrad("f().unwrap()", "f().unwrap_or_default()"),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, EditError::NotFoundAfterEdit);
+        assert!(err.to_string().contains("předchozí úprava"), "{err}");
+        assert!(err.to_string().contains("Přečti si soubor znovu"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn u_netknuteho_souboru_zustava_bezna_hlaska() {
+        // Rozlišení má smysl jen tam, kde soubor opravdu čeká s úpravou.
+        let fs = fs();
+        let mut plan = EditPlan::new();
+        let err = plan
+            .propose(&fs, cesta("src/main.rs"), nahrad("neexistuje", "x"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err, EditError::NotFound);
+        assert!(err.to_string().contains("odsazení"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn strop_poctu_souboru_se_ozve() {
+        // Při zakládání projektu model klidně navrhne strukturu na desítky
+        // souborů. Nad strop už to nikdo neprojde očima a potvrzování
+        // ztrácí smysl — tak se to odmítne nahlas.
+        let fs = Arc::new(FakeFs::new(&[])) as Arc<dyn WorkspaceFs>;
+        let mut plan = EditPlan::new();
+
+        for i in 0..EditPlan::MAX_FILES {
+            plan.propose(
+                &fs,
+                cesta(&format!("src/m{i}.rs")),
+                EditKind::Create {
+                    content: "x\n".into(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let err = plan
+            .propose(
+                &fs,
+                cesta("src/jeste_jeden.rs"),
+                EditKind::Create {
+                    content: "x\n".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, EditError::TooManyFiles { .. }), "{err:?}");
+        assert!(err.to_string().contains("jádro"), "{err}");
+        assert_eq!(plan.changes().len(), EditPlan::MAX_FILES);
+    }
+
+    #[tokio::test]
+    async fn strop_nebrani_dalsi_uprave_uz_zapocateho_souboru() {
+        // Strop je na počet souborů, ne na počet úprav. Kdyby bránil i
+        // opravě rozdělaného souboru, model by se zasekl na plném plánu.
+        let fs = Arc::new(FakeFs::new(&[])) as Arc<dyn WorkspaceFs>;
+        let mut plan = EditPlan::new();
+        for i in 0..EditPlan::MAX_FILES {
+            plan.propose(
+                &fs,
+                cesta(&format!("src/m{i}.rs")),
+                EditKind::Create {
+                    content: "puvodni\n".into(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        plan.propose(&fs, cesta("src/m0.rs"), nahrad("puvodni", "opravene"))
+            .await
+            .expect("úprava už započatého souboru musí projít");
+    }
+
+    #[tokio::test]
+    async fn zalozeni_celeho_projektu_do_prazdne_slozky() {
+        // Fáze 5 v malém: několik souborů naráz, nic na disku, dokud se
+        // neschválí, a pak všechny.
+        let fs = Arc::new(FakeFs::new(&[])) as Arc<dyn WorkspaceFs>;
+        let mut plan = EditPlan::new();
+
+        for (path, obsah) in [
+            ("Cargo.toml", "[package]\nname = \"novy\"\n"),
+            ("src/main.rs", "fn main() {\n    println!(\"ahoj\");\n}\n"),
+            ("README.md", "# Nový projekt\n"),
+        ] {
+            plan.propose(
+                &fs,
+                cesta(path),
+                EditKind::Create {
+                    content: obsah.into(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(plan.changes().len(), 3);
+        assert!(plan.changes().iter().all(|c| c.preview().creates_file));
+        // Dokud se neschválí, složka zůstává prázdná.
+        assert!(fs.list(None).await.unwrap().is_empty());
+
+        let cesty: Vec<RelativePath> = plan.changes().iter().map(|c| c.path.clone()).collect();
+        plan.apply(&fs, &cesty).await.unwrap();
+
+        assert_eq!(fs.list(None).await.unwrap().len(), 3);
+        assert!(plan.is_empty());
     }
 
     #[tokio::test]

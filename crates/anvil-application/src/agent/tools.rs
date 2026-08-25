@@ -126,11 +126,45 @@ impl Tool for ListFiles {
 pub struct ReadFile {
     fs: Arc<dyn WorkspaceFs>,
     artifacts: SharedArtifacts,
+    /// Když je k dispozici, čte se z něj **rozpracovaný** obsah.
+    plan: Option<SharedPlan>,
 }
 
 impl ReadFile {
     pub fn new(fs: Arc<dyn WorkspaceFs>, artifacts: SharedArtifacts) -> Self {
-        Self { fs, artifacts }
+        Self {
+            fs,
+            artifacts,
+            plan: None,
+        }
+    }
+
+    /// Čtení, které vidí i navržené úpravy.
+    ///
+    /// Bez tohohle model po vlastní úpravě přečte z disku původní znění,
+    /// pošle stejnou úpravu znovu a dostane „úsek se nevyskytuje" — protože
+    /// se počítá proti rozpracovanému obsahu, který ale nevidí. Skutečná
+    /// Gemma tak poslala tutéž opravu třikrát za sebou a pak se šla ptát
+    /// grepem.
+    pub fn with_plan(mut self, plan: SharedPlan) -> Self {
+        self.plan = Some(plan);
+        self
+    }
+
+    /// Zapíše, že model soubor viděl — kvůli kontrole, že nálezy hlásí
+    /// jen k tomu, co opravdu četl.
+    fn zaznamenej(&self, path: &RelativePath) {
+        let mut a = self.artifacts.lock().expect("zámek");
+        if !a.files_read.contains(path) {
+            a.files_read.push(path.clone());
+        }
+    }
+
+    /// Rozpracovaný obsah souboru, je-li nějaký.
+    async fn rozpracovany(&self, path: &RelativePath) -> Option<String> {
+        let plan = self.plan.as_ref()?;
+        let plan = plan.lock().await;
+        plan.find(path).map(|z| z.result().to_string())
     }
 }
 
@@ -170,6 +204,21 @@ impl Tool for ReadFile {
             Err(e) => return ToolResult::error(e.to_string()),
         };
 
+        // Rozpracovaná verze má přednost — je to ta, proti které se počítá
+        // další úprava.
+        if let Some(obsah) = self.rozpracovany(&path).await {
+            self.zaznamenej(&path);
+            let mut out = String::new();
+            for (i, radek) in obsah.lines().enumerate() {
+                out.push_str(&format!("{:>5} | {radek}\n", i + 1));
+            }
+            out.push_str(
+                "\n(Tohle je znění po tvých navržených úpravách, ne to na disku. \
+                 Další úprava se počítá proti němu.)\n",
+            );
+            return ToolResult::ok(out);
+        }
+
         match self
             .fs
             .read(
@@ -180,12 +229,7 @@ impl Tool for ReadFile {
             .await
         {
             Ok(slice) => {
-                {
-                    let mut a = self.artifacts.lock().expect("zámek");
-                    if !a.files_read.contains(&slice.path) {
-                        a.files_read.push(slice.path.clone());
-                    }
-                }
+                self.zaznamenej(&slice.path);
 
                 // Čísla řádků jsou nutná: bez nich model nemá jak nález
                 // umístit a hádal by je.
@@ -499,7 +543,7 @@ impl Toolbox {
             tools: vec![
                 Arc::new(ListFiles::new(fs.clone())),
                 Arc::new(Grep::new(fs.clone())),
-                Arc::new(ReadFile::new(fs.clone(), artifacts.clone())),
+                Arc::new(ReadFile::new(fs.clone(), artifacts.clone()).with_plan(plan.clone())),
                 Arc::new(EditFile::new(fs.clone(), plan.clone())),
                 Arc::new(CreateFile::new(fs, plan)),
             ],
@@ -841,6 +885,44 @@ mod tests {
             "chybí rozsah změny: {}",
             r.content
         );
+    }
+
+    /// Po vlastní úpravě musí model dostat znění, proti kterému se počítá
+    /// další — jinak z disku přečte původní text, pošle stejnou úpravu
+    /// znovu a dostane „úsek se nevyskytuje“.
+    #[tokio::test]
+    async fn cteni_po_uprave_vraci_rozpracovane_zneni() {
+        let fs = fs();
+        let plan = plan();
+        EditFile::new(fs.clone(), plan.clone())
+            .call(&json!({
+                "path": "src/main.rs",
+                "old_text": "neco().unwrap()",
+                "new_text": "neco().unwrap_or(0)"
+            }))
+            .await;
+
+        let r = ReadFile::new(fs, artefakty())
+            .with_plan(plan)
+            .call(&json!({"path": "src/main.rs"}))
+            .await;
+
+        assert!(r.content.contains("unwrap_or(0)"), "{}", r.content);
+        assert!(
+            r.content.contains("po tvých navržených úpravách"),
+            "model musí vědět, že to není stav disku: {}",
+            r.content
+        );
+    }
+
+    #[tokio::test]
+    async fn cteni_bez_planu_vraci_disk() {
+        // Review a jednosouborový průchod plán nemají a mají číst disk.
+        let r = ReadFile::new(fs(), artefakty())
+            .call(&json!({"path": "src/main.rs"}))
+            .await;
+        assert!(r.content.contains("neco().unwrap()"), "{}", r.content);
+        assert!(!r.content.contains("navržených úpravách"), "{}", r.content);
     }
 
     #[tokio::test]

@@ -169,6 +169,17 @@ export function App() {
     void api.cancelGeneration();
   };
 
+  const zalozitProjekt = async (path: string) => {
+    setStats(null);
+    setReport(null);
+    try {
+      setSession(await api.createWorkspace(path));
+      setUpravy([]);
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
   const zmenitSlozku = async (path: string | null) => {
     try {
       setSession(await api.setWorkspace(path));
@@ -462,6 +473,7 @@ export function App() {
             onSend={odeslat}
             onCancel={zrusit}
             onWorkspaceChange={zmenitSlozku}
+            onWorkspaceCreate={zalozitProjekt}
             onReview={zkontrolovat}
             draft={predvyplnit()}
           />
