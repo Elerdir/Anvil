@@ -1,8 +1,10 @@
 //! Nástroje, které si model může vyžádat.
 //!
-//! Všechny jsou zatím **jen pro čtení**. Zápis přijde ve fázi 4 a projde
-//! potvrzením uživatele; do té doby platí, že agentní smyčka nemůže nic
-//! rozbít, ať se model splete jakkoli.
+//! Čtecí nástroje sahají na disk rovnou. Zapisovat neumí **žádný**:
+//! `edit_file` a `create_file` úpravu jen spočítají a odloží do
+//! [`EditPlan`](crate::edits::EditPlan). Na disk se dostane až příkazem,
+//! který spustí uživatel poté, co viděl náhled — takže ať se model splete
+//! jakkoli, sám nic nepřepíše.
 //!
 //! Společné pravidlo výstupů: **stručnost je rychlost.** Prompt se zpracovává
 //! ~27 tokenů za sekundu, takže každý řádek navíc je čas, který uživatel
@@ -12,6 +14,7 @@
 use std::sync::{Arc, Mutex};
 
 use anvil_domain::{
+    edit::EditKind,
     ports::WorkspaceFs,
     review::{Finding, Severity},
     tool::{ParamKind, ToolParam, ToolResult, ToolSpec},
@@ -19,6 +22,8 @@ use anvil_domain::{
 };
 use async_trait::async_trait;
 use serde_json::Value;
+
+use crate::edits::EditPlan;
 
 /// Co po běhu smyčky zbyde vedle textu odpovědi.
 #[derive(Debug, Default)]
@@ -275,6 +280,129 @@ impl Tool for Grep {
     }
 }
 
+// --- edit_file / create_file ----------------------------------------------
+
+/// Sdílený plán úprav. Nástroje do něj přidávají návrhy, zapisuje až uživatel.
+pub type SharedPlan = Arc<tokio::sync::Mutex<EditPlan>>;
+
+/// Společný základ obou nástrojů pro zápis.
+///
+/// **Nic nezapisuje.** Úprava se spočítá, ověří a odloží; na disk se dostane
+/// až příkazem, který spustí uživatel poté, co viděl náhled.
+struct Navrh {
+    fs: Arc<dyn WorkspaceFs>,
+    plan: SharedPlan,
+}
+
+impl Navrh {
+    async fn pridej(&self, path: RelativePath, kind: EditKind) -> ToolResult {
+        let mut plan = self.plan.lock().await;
+        match plan.propose(&self.fs, path, kind).await {
+            Ok(nahled) => ToolResult::ok(format!(
+                "Návrh připraven: {}. Čeká na schválení uživatelem — zapsaný \
+                 zatím není, tak s tím ve zbytku odpovědi nepočítej jako s hotovým.",
+                nahled.headline()
+            )),
+            Err(e) => ToolResult::error(e.to_string()),
+        }
+    }
+}
+
+pub struct EditFile(Navrh);
+
+impl EditFile {
+    pub fn new(fs: Arc<dyn WorkspaceFs>, plan: SharedPlan) -> Self {
+        Self(Navrh { fs, plan })
+    }
+}
+
+#[async_trait]
+impl Tool for EditFile {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "edit_file",
+            "Navrhne úpravu souboru: nahradí přesný úsek textu jiným. \
+             Nezapisuje — návrh schvaluje uživatel.",
+            vec![
+                ToolParam::required("path", ParamKind::Text, "Cesta ke souboru."),
+                ToolParam::required(
+                    "old_text",
+                    ParamKind::Text,
+                    "Přesné znění úseku, který se má nahradit, včetně odsazení. \
+                     Musí být v souboru právě jednou — když ne, přidej okolní řádky.",
+                ),
+                ToolParam::required("new_text", ParamKind::Text, "Čím se úsek nahradí."),
+            ],
+        )
+    }
+
+    async fn call(&self, args: &Value) -> ToolResult {
+        let (Some(raw), Some(old_text), Some(new_text)) = (
+            text_arg(args, "path"),
+            text_arg(args, "old_text"),
+            text_arg(args, "new_text"),
+        ) else {
+            return ToolResult::error("Úprava potřebuje path, old_text i new_text.");
+        };
+
+        let path = match RelativePath::parse(raw) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(e.to_string()),
+        };
+        self.0
+            .pridej(
+                path,
+                EditKind::Replace {
+                    old_text: old_text.to_string(),
+                    new_text: new_text.to_string(),
+                },
+            )
+            .await
+    }
+}
+
+pub struct CreateFile(Navrh);
+
+impl CreateFile {
+    pub fn new(fs: Arc<dyn WorkspaceFs>, plan: SharedPlan) -> Self {
+        Self(Navrh { fs, plan })
+    }
+}
+
+#[async_trait]
+impl Tool for CreateFile {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "create_file",
+            "Navrhne založení nového souboru. Existující soubor nepřepíše — \
+             na to je edit_file. Nezapisuje, návrh schvaluje uživatel.",
+            vec![
+                ToolParam::required("path", ParamKind::Text, "Cesta nového souboru."),
+                ToolParam::required("content", ParamKind::Text, "Celý obsah souboru."),
+            ],
+        )
+    }
+
+    async fn call(&self, args: &Value) -> ToolResult {
+        let (Some(raw), Some(content)) = (text_arg(args, "path"), text_arg(args, "content")) else {
+            return ToolResult::error("Založení souboru potřebuje path i content.");
+        };
+
+        let path = match RelativePath::parse(raw) {
+            Ok(p) => p,
+            Err(e) => return ToolResult::error(e.to_string()),
+        };
+        self.0
+            .pridej(
+                path,
+                EditKind::Create {
+                    content: content.to_string(),
+                },
+            )
+            .await
+    }
+}
+
 // --- report_finding -------------------------------------------------------
 
 pub struct ReportFinding {
@@ -360,6 +488,25 @@ impl Toolbox {
         }
     }
 
+    /// Nástroje pro práci s projektem včetně **návrhu úprav**.
+    ///
+    /// Zápis tu je, ale jen jako návrh — viz [`EditFile`]. Čtecí nástroje
+    /// zůstávají, protože bez přečtení souboru model nemá odkud vzít přesné
+    /// znění úseku k nahrazení.
+    pub fn for_editing(fs: Arc<dyn WorkspaceFs>, plan: SharedPlan) -> Self {
+        let artifacts: SharedArtifacts = Arc::new(Mutex::new(RunArtifacts::default()));
+        Self {
+            tools: vec![
+                Arc::new(ListFiles::new(fs.clone())),
+                Arc::new(Grep::new(fs.clone())),
+                Arc::new(ReadFile::new(fs.clone(), artifacts.clone())),
+                Arc::new(EditFile::new(fs.clone(), plan.clone())),
+                Arc::new(CreateFile::new(fs, plan)),
+            ],
+            artifacts,
+        }
+    }
+
     /// Nástroje pro průchod **jedním souborem**.
     ///
     /// Obsah souboru dostane model rovnou v zadání, takže si ho nemá čím
@@ -410,7 +557,10 @@ pub mod fake_fs {
     use super::*;
 
     pub struct FakeFs {
-        soubory: Vec<(RelativePath, String)>,
+        /// Za zámkem, protože `write` mění obsah a port má `&self` —
+        /// dvojník musí umět totéž co disk, jinak proti němu nejde
+        /// otestovat zápis.
+        soubory: Mutex<Vec<(RelativePath, String)>>,
         limits: FsLimits,
         /// Když je vyplněné, každé volání selže touhle chybou.
         selhani: Option<String>,
@@ -419,10 +569,14 @@ pub mod fake_fs {
     impl FakeFs {
         pub fn new(soubory: &[(&str, &str)]) -> Self {
             Self {
-                soubory: soubory
-                    .iter()
-                    .map(|(p, o)| (RelativePath::parse(p).expect("platná cesta"), o.to_string()))
-                    .collect(),
+                soubory: Mutex::new(
+                    soubory
+                        .iter()
+                        .map(|(p, o)| {
+                            (RelativePath::parse(p).expect("platná cesta"), o.to_string())
+                        })
+                        .collect(),
+                ),
                 limits: FsLimits::default(),
                 selhani: None,
             }
@@ -435,7 +589,7 @@ pub mod fake_fs {
 
         pub fn failing(message: &str) -> Self {
             Self {
-                soubory: Vec::new(),
+                soubory: Mutex::new(Vec::new()),
                 limits: FsLimits::default(),
                 selhani: Some(message.to_string()),
             }
@@ -450,9 +604,11 @@ pub mod fake_fs {
             }
             // Stejné porovnávání vzorů jako na disku. Dvojník, který vzorům
             // rozumí jinak než skutečnost, dělá ze zelených testů past —
-            //  mu procházel, zatímco na disku nesedl na nic.
+            // `src/**/*.rs` mu procházel, zatímco na disku nesedl na nic.
             Ok(self
                 .soubory
+                .lock()
+                .expect("zámek")
                 .iter()
                 .map(|(p, _)| p.clone())
                 .filter(|p| glob.is_none_or(|g| anvil_domain::workspace::matches_glob(p, g)))
@@ -468,8 +624,8 @@ pub mod fake_fs {
             if let Some(e) = &self.selhani {
                 return Err(anvil_domain::error::DomainError::storage(e));
             }
-            let obsah = self
-                .soubory
+            let soubory = self.soubory.lock().expect("zámek");
+            let obsah = soubory
                 .iter()
                 .find(|(p, _)| p == path)
                 .map(|(_, o)| o.as_str())
@@ -497,7 +653,7 @@ pub mod fake_fs {
                 return Err(anvil_domain::error::DomainError::storage(e));
             }
             let mut out = Vec::new();
-            for (path, obsah) in &self.soubory {
+            for (path, obsah) in self.soubory.lock().expect("zámek").iter() {
                 for (i, radek) in obsah.lines().enumerate() {
                     if radek.contains(pattern) {
                         out.push(GrepHit {
@@ -509,6 +665,31 @@ pub mod fake_fs {
                 }
             }
             Ok(out)
+        }
+
+        async fn read_whole(&self, path: &RelativePath) -> DomainResult<Option<String>> {
+            if let Some(e) = &self.selhani {
+                return Err(anvil_domain::error::DomainError::storage(e));
+            }
+            Ok(self
+                .soubory
+                .lock()
+                .expect("zámek")
+                .iter()
+                .find(|(p, _)| p == path)
+                .map(|(_, o)| o.clone()))
+        }
+
+        async fn write(&self, path: &RelativePath, content: &str) -> DomainResult<()> {
+            if let Some(e) = &self.selhani {
+                return Err(anvil_domain::error::DomainError::storage(e));
+            }
+            let mut soubory = self.soubory.lock().expect("zámek");
+            match soubory.iter_mut().find(|(p, _)| p == path) {
+                Some((_, o)) => *o = content.to_string(),
+                None => soubory.push((path.clone(), content.to_string())),
+            }
+            Ok(())
         }
 
         fn limits(&self) -> FsLimits {
@@ -608,6 +789,98 @@ mod tests {
             "model musí poznat, že se nehledalo vůbec: {}",
             r.content
         );
+    }
+
+    // --- edit_file / create_file ---
+
+    fn plan() -> SharedPlan {
+        Arc::new(tokio::sync::Mutex::new(EditPlan::new()))
+    }
+
+    /// Nejdůležitější test celé fáze 4: nástroj na disk nesahá.
+    #[tokio::test]
+    async fn edit_file_nezapisuje_jen_navrhuje() {
+        let fs = fs();
+        let plan = plan();
+        let r = EditFile::new(fs.clone(), plan.clone())
+            .call(&json!({
+                "path": "src/main.rs",
+                "old_text": "neco().unwrap()",
+                "new_text": "neco().unwrap_or(0)"
+            }))
+            .await;
+
+        assert!(!r.is_error, "{}", r.content);
+        let na_disku = fs
+            .read_whole(&RelativePath::parse("src/main.rs").unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            na_disku.contains("neco().unwrap()"),
+            "soubor se změnil bez schválení"
+        );
+        assert_eq!(plan.lock().await.changes().len(), 1);
+    }
+
+    /// Model si musí z odpovědi odnést, že hotovo **není** — jinak
+    /// v následujícím kole staví na změně, která na disku není.
+    #[tokio::test]
+    async fn odpoved_rekne_ze_se_ceka_na_schvaleni() {
+        let r = EditFile::new(fs(), plan())
+            .call(&json!({
+                "path": "src/main.rs",
+                "old_text": "neco().unwrap()",
+                "new_text": "neco().unwrap_or(0)"
+            }))
+            .await;
+
+        assert!(r.content.contains("schválení"), "{}", r.content);
+        assert!(
+            r.content.contains("+1"),
+            "chybí rozsah změny: {}",
+            r.content
+        );
+    }
+
+    #[tokio::test]
+    async fn nejednoznacna_uprava_dostane_srozumitelnou_chybu() {
+        let fs = Arc::new(FakeFs::new(&[("a.txt", "x\nx\nx")])) as Arc<dyn WorkspaceFs>;
+        let r = EditFile::new(fs, plan())
+            .call(&json!({"path": "a.txt", "old_text": "x", "new_text": "y"}))
+            .await;
+
+        assert!(r.is_error);
+        assert!(r.content.contains("3×"), "{}", r.content);
+        assert!(r.content.contains("okolní řádky"), "{}", r.content);
+    }
+
+    #[tokio::test]
+    async fn create_file_nepresahne_existujici() {
+        let r = CreateFile::new(fs(), plan())
+            .call(&json!({"path": "src/main.rs", "content": "nový obsah"}))
+            .await;
+
+        assert!(r.is_error);
+        assert!(r.content.contains("edit_file"), "{}", r.content);
+    }
+
+    #[tokio::test]
+    async fn cesta_ven_z_projektu_neprojde_ani_pri_zapisu() {
+        let r = CreateFile::new(fs(), plan())
+            .call(&json!({"path": "../mimo.txt", "content": "x"}))
+            .await;
+        assert!(r.is_error, "{}", r.content);
+    }
+
+    #[tokio::test]
+    async fn sada_pro_upravy_ma_cteni_i_navrh() {
+        // Bez čtení nemá model odkud vzít přesné znění úseku k nahrazení.
+        let t = Toolbox::for_editing(fs(), plan());
+        let jmena = t.names();
+        for ocekavany in ["read_file", "list_files", "edit_file", "create_file"] {
+            assert!(jmena.contains(&ocekavany.to_string()), "{jmena:?}");
+        }
     }
 
     // --- read_file ---

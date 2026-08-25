@@ -7,6 +7,7 @@
 pub mod agent;
 pub mod chat;
 pub mod compaction;
+pub mod edits;
 pub mod prompts;
 pub mod review;
 
@@ -16,4 +17,5 @@ pub mod testing;
 pub use agent::runner::{AgentEvent, AgentHooks, AgentLoop};
 pub use chat::{ChatService, SendOutcome, TurnContext};
 pub use compaction::{CompactionPlan, CompactionService};
+pub use edits::{EditPlan, FileChange};
 pub use review::{ReviewOutcome, ReviewService};

@@ -9,6 +9,7 @@
 //! z vnějších vrstev.
 
 pub mod conversation;
+pub mod edit;
 pub mod error;
 pub mod history;
 pub mod id;

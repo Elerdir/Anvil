@@ -2,6 +2,7 @@ import { createSignal, onCleanup, onMount, Show } from "solid-js";
 
 import { Composer } from "./components/Composer";
 import { Findings } from "./components/Findings";
+import { PendingEdits } from "./components/PendingEdits";
 import { MessageList } from "./components/MessageList";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -12,6 +13,7 @@ import {
   type AgentEventView,
   type ConversationSummaryView,
   type GenerationStats,
+  type PendingEditView,
   type ReviewReportView,
   type ModelView,
   type Role,
@@ -36,6 +38,9 @@ export function App() {
   const [report, setReport] = createSignal<ReviewReportView | null>(null);
   /** Co model právě dělá — bez toho je okno minuty prázdné. */
   const [cinnost, setCinnost] = createSignal<string | null>(null);
+  /** Návrhy úprav čekající na schválení. Na disku zatím nejsou. */
+  const [upravy, setUpravy] = createSignal<PendingEditView[]>([]);
+  const [zapisuje, setZapisuje] = createSignal(false);
   /** Text, který se má vložit do pole pro dotaz. Viz `zeptatZnovu`. */
   const [predvyplnit, setPredvyplnit] = createSignal<{ text: string } | null>(null);
   const [nastaveniOtevrena, setNastaveniOtevrena] = createSignal(false);
@@ -130,6 +135,8 @@ export function App() {
       setGenerating(false);
       setStreaming("");
       setCinnost(null);
+      // Model mohl navrhnout úpravy — bez tohohle by o nich uživatel nevěděl.
+      await nacistUpravy();
       // Název se odvozuje z prvního dotazu, takže se seznam musí obnovit.
       await nacistChaty();
     }
@@ -237,6 +244,42 @@ export function App() {
     } catch (e) {
       hlasit(e);
       await nacistChaty();
+    }
+  };
+
+  const nacistUpravy = async () => {
+    try {
+      setUpravy(await api.pendingEdits());
+    } catch (e) {
+      hlasit(e);
+    }
+  };
+
+  const zapsatUpravy = async (paths: string[]) => {
+    setZapisuje(true);
+    try {
+      const zapsane = await api.applyEdits(paths);
+      await nacistUpravy();
+      // Krátké potvrzení: po zápisu zmizí diff a bez tohohle by nebylo
+      // poznat, jestli se něco stalo.
+      setChyba(null);
+      setCinnost(`zapsáno: ${zapsane.join(", ")}`);
+      setTimeout(() => setCinnost(null), 4000);
+    } catch (e) {
+      hlasit(e);
+      // I po chybě se seznam obnoví — část souborů se zapsat mohla.
+      await nacistUpravy();
+    } finally {
+      setZapisuje(false);
+    }
+  };
+
+  const zahoditUpravy = async (paths: string[] | null) => {
+    try {
+      await api.discardEdits(paths);
+      await nacistUpravy();
+    } catch (e) {
+      hlasit(e);
     }
   };
 
@@ -375,6 +418,15 @@ export function App() {
         />
 
         <div class="dock">
+          <Show when={upravy().length > 0}>
+            <PendingEdits
+              edits={upravy()}
+              busy={zapisuje()}
+              onApply={zapsatUpravy}
+              onDiscard={zahoditUpravy}
+            />
+          </Show>
+
           <Show when={report()}>
             {(r) => <Findings report={r()} onClose={() => setReport(null)} />}
           </Show>
