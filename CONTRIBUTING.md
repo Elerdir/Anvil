@@ -67,12 +67,19 @@ odchytit ruční běh:
 ```bash
 scripts\smoke.bat D:\models\model.gguf        # dvě kola konverzace + kontroly
 scripts\prefill.bat D:\models\model.gguf      # rychlost zpracování promptu
+scripts\review.bat D:\models\model.gguf fixtures\vadny-projekt   # kolik chyb najde
 ```
 
 Když se sahá na `ai/llama_engine.rs`, `ai/chat_template.rs`, `ai/offload_plan.rs`
 nebo `ai/kv_reuse.rs`, pusť `smoke` **před** otevřením PR a výsledek napiš do
 popisu PR. Tyhle soubory prošly jednotkovými testy i ve chvíli, kdy byly
 prokazatelně špatně.
+
+Když se sahá na `review.rs`, `agent/runner.rs` nebo `agent/tools.rs`, pusť
+`review` nad `fixtures/vadny-projekt` a do popisu PR napiš, **kolik ze šesti
+zasazených vad model našel**. Skriptované testy ověřují, že smyčka funguje;
+jestli je k něčemu, se pozná jenom takhle. Číslo kolísá mezi běhy, takže pokles
+o jednu vadu ještě nic neznamená — pokles na polovinu ano.
 
 **macOS.** Zatím ho nikdo nespustil. Než se to změní, ber každou změnu
 v `#[cfg]` větvích jako neověřenou.

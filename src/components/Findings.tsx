@@ -31,7 +31,8 @@ export function Findings(props: Props) {
         <div>
           <span class="findings-headline">{props.report.headline}</span>
           <span class="findings-meta">
-            {props.report.filesRead.length} souborů · {props.report.rounds} kol · {trvani()}
+            {props.report.filesRead.length} z {props.report.filesTotal} souborů ·{" "}
+            {props.report.rounds} kol · {trvani()}
           </span>
         </div>
         <button class="ghost" onClick={props.onClose} title="Skrýt nálezy">
@@ -40,11 +41,19 @@ export function Findings(props: Props) {
       </header>
 
       {/* Bez tohohle nejde odlišit „nic nenašel" od „nedostal se k tomu". */}
+      <Show when={props.report.filesRead.length < props.report.filesTotal}>
+        <p class="findings-warning">
+          Prošlo se {props.report.filesRead.length} souborů z{" "}
+          {props.report.filesTotal}. O zbytku tenhle výsledek nic neříká — zúžit
+          zadání vzorem cesty (třeba <code>src/**</code>) ho namíří tam, kde ho
+          potřebuješ.
+        </p>
+      </Show>
+
       <Show when={props.report.hitRoundLimit}>
         <p class="findings-warning">
-          Review skončilo na limitu kol, ne proto, že by model došel na konec.
-          Projekt může mít víc problémů, než je vidět — zkus zúžit zadání na
-          konkrétní část.
+          U některého souboru došla kola dřív, než model skončil. Tam mohlo něco
+          zůstat nenalezené.
         </p>
       </Show>
 
@@ -52,10 +61,9 @@ export function Findings(props: Props) {
         when={props.report.findings.length > 0}
         fallback={
           <p class="findings-empty">
-            Model nenahlásil žádný nález. Prošel{" "}
             {props.report.filesRead.length === 0
-              ? "ale žádný soubor nepřečetl — zkus zadání zopakovat."
-              : `${props.report.filesRead.length} souborů.`}
+              ? "Neprošel se žádný soubor — složka je prázdná, nebo vzor nesedl na nic."
+              : `Žádný nález ve ${props.report.filesRead.length} prošlých souborech.`}
           </p>
         }
       >

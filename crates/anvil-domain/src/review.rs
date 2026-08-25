@@ -132,6 +132,10 @@ pub struct ReviewReport {
     /// Soubory, které model během review otevřel — aby bylo vidět, co viděl
     /// a co ne. Bez toho se nedá odlišit „nic nenašel" od „nedostal se tam".
     pub files_read: Vec<RelativePath>,
+    /// Kolik souborů projekt má. Bez toho nejde poznat, jestli „bez nálezu"
+    /// znamená čistý projekt, nebo že se prošly dva soubory ze čtrnácti.
+    #[serde(default)]
+    pub files_total: u32,
     /// Kolik kol smyčka spotřebovala.
     pub rounds: u32,
     /// Smyčka skončila na limitu kol, ne proto, že model dokončil práci.

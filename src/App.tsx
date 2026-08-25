@@ -103,6 +103,12 @@ export function App() {
         return e.ok ? null : `${e.name} selhal`;
       case "prose":
         return null;
+      case "step":
+        // Review jde soubor po souboru, takže tohle je jediný údaj, ze
+        // kterého je poznat, jak daleko to je.
+        return e.done >= e.total
+          ? null
+          : `${e.label} — ${e.done + 1} z ${e.total}`;
     }
   };
 

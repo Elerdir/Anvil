@@ -51,6 +51,13 @@ pub enum AgentEvent {
     Prose {
         text: String,
     },
+    /// Postup dlouhé práce složené z více kroků. Review jde soubor po souboru
+    /// a bez tohohle by uživatel u většího projektu koukal minuty na nic.
+    Step {
+        done: u32,
+        total: u32,
+        label: String,
+    },
 }
 
 pub type AgentEventCallback = Arc<dyn Fn(AgentEvent) + Send + Sync + 'static>;
@@ -224,8 +231,32 @@ impl AgentLoop {
                 );
             }
 
-            // Žádné volání = model dořekl, co chtěl.
+            // Žádné volání = model dořekl, co chtěl. Až na jednu výjimku:
+            // někdy nástroj zavolá **prózou** — `report_finding(file="…", …)`
+            // místo bloku `<tool>`. Skutečná Gemma tak přišla o nález, který
+            // správně našla i popsala, a smyčka to vyhodnotila jako „hotovo".
+            // Jedno připomenutí formátu je levnější než ztracená práce.
             if !parsed.wants_tools() {
+                if let Some(nazev) = protocol::tool_called_as_prose(&parsed.prose, &toolbox.names())
+                {
+                    if invalid_streak < self.max_consecutive_invalid {
+                        invalid_streak += 1;
+                        conversation.push(
+                            Message::assistant(outcome.text.trim())
+                                .with_token_count(outcome.generated_tokens),
+                        );
+                        conversation.push(Message::new(
+                            Role::Tool,
+                            format!(
+                                "`{nazev}` se takhle nespustí — volání musí být v bloku \
+                                 <tool>{{\"name\":\"{nazev}\",\"arguments\":{{…}}}}</tool>. \
+                                 Pošli ho znovu v tomhle tvaru."
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+
                 posledni_text = parsed.prose;
                 if !posledni_text.is_empty() {
                     conversation.push(
@@ -449,6 +480,62 @@ mod tests {
             .await
             .expect("smyčka nemá selhat");
         (out, c)
+    }
+
+    // --- volání prózou ---
+
+    /// Gemma při review `src/token.rs` napsala `report_finding(file="…", …)`
+    /// místo bloku `<tool>`. Chybu našla správně, ale nález se ztratil —
+    /// smyčka vzala odpověď bez bloku jako „hotovo".
+    #[tokio::test]
+    async fn volani_prozou_dostane_pripomenuti_a_nalez_se_zachrani() {
+        let (out, c) = spustit(vec![
+            ScriptedResponse::text(
+                r#"report_finding(file="src/main.rs", severity="critical", summary="unwrap")"#,
+            ),
+            ScriptedResponse::text(volani(
+                r#"{"name":"report_finding","arguments":{"file":"src/main.rs","severity":"critical","summary":"unwrap na None"}}"#,
+            )),
+            ScriptedResponse::text("To je vše."),
+        ])
+        .await;
+
+        let _ = c;
+        assert_eq!(out.artifacts.findings.len(), 1, "nález se ztratil");
+        assert!(!out.gave_up_on_invalid);
+    }
+
+    #[tokio::test]
+    async fn pripomenuti_formatu_rekne_jak_to_ma_vypadat() {
+        let (_, c) = spustit(vec![
+            ScriptedResponse::text(r#"report_finding(file="src/main.rs")"#),
+            ScriptedResponse::text("Hotovo."),
+        ])
+        .await;
+
+        let vystup = c
+            .messages
+            .iter()
+            .find(|m| m.role == Role::Tool)
+            .expect("model musí dostat zpátky, co je špatně");
+        assert!(vystup.content.contains("<tool>"), "{}", vystup.content);
+        assert!(
+            vystup.content.contains("report_finding"),
+            "{}",
+            vystup.content
+        );
+    }
+
+    #[tokio::test]
+    async fn zminka_nastroje_ve_shrnuti_smycku_neprodluzuje() {
+        // „Nahlásil jsem to přes report_finding" je normální věta a nesmí
+        // spustit další kolo.
+        let (out, _) = spustit(vec![ScriptedResponse::text(
+            "Nálezy jsem nahlásil přes report_finding. To je vše.",
+        )])
+        .await;
+
+        assert_eq!(out.rounds, 1);
     }
 
     // --- docházející kola ---
@@ -789,6 +876,7 @@ mod tests {
                         AgentEvent::ToolCalled { name, .. } => format!("volám {name}"),
                         AgentEvent::ToolFinished { name, ok } => format!("hotovo {name} ok={ok}"),
                         AgentEvent::Prose { .. } => "text".into(),
+                        AgentEvent::Step { done, total, .. } => format!("krok {done}/{total}"),
                     });
                 })),
             )

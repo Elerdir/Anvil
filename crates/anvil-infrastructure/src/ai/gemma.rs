@@ -248,15 +248,18 @@ fn drzet_na_konci(text: &str) -> usize {
     const MAX_JMENO: usize = 32;
 
     let keep = partial_marker_len(text);
-    if keep == 0 {
-        return 0;
-    }
 
+    // Zpátky se sahá i tehdy, když se **žádná** značka nedrží. Gemma posílá
+    // hlavičku po částech a rozdělit se může kdekoli: `<thought` v jedné
+    // dávce a ` <channel|>` v další. Kdyby se `<thought` pustilo ven hned,
+    // zavírací značka by dorazila pozdě a jméno by uživateli zůstalo v textu
+    // — přesně to se dělo nad každou odpovědí.
     let hranice = text.len() - keep;
     let pred = &text[..hranice];
     let Some(zacatek) = pred.rfind('<') else {
         return keep;
     };
+
     let jmeno = &pred[zacatek + 1..];
     let vypada_jako_jmeno = hranice - zacatek <= MAX_JMENO
         && jmeno
@@ -389,6 +392,30 @@ mod tests {
     #[test]
     fn mangled_header_split_across_chunks_still_works() {
         assert_eq!(run(&["<thought <chan", "nel|>skryté"]), "");
+    }
+
+    /// Rozdělit se to může kdekoli, ne jen uvnitř značky. Tohle je tvar,
+    /// který skutečná Gemma poslala v průběhu review — `<thought` samotné
+    /// v jedné dávce — a filtr ho pouštěl ven.
+    #[test]
+    fn mangled_header_split_right_after_the_name() {
+        assert_eq!(run(&["<thought", " <channel|>skryté"]), "");
+        assert_eq!(run(&["<thou", "ght <channel|>skryté"]), "");
+    }
+
+    #[test]
+    fn nedokoncene_jmeno_se_na_konci_pusti_ven() {
+        // Držet text donekonečna je horší než ukázat pár znaků navíc.
+        assert_eq!(run(&["hotovo <thought"]), "hotovo <thought");
+    }
+
+    #[test]
+    fn ostre_zavorky_v_kodu_se_nezdrzuji() {
+        // `Vec<String>` nevypadá jako hlavička kanálu, takže projde rovnou.
+        assert_eq!(
+            run(&["let v: Vec<String> = vec![];"]),
+            "let v: Vec<String> = vec![];"
+        );
     }
 
     #[test]
