@@ -160,10 +160,25 @@ pub struct GenerationStats {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentEventView {
-    Round { round: u32 },
-    ToolCalled { name: String, summary: String },
-    ToolFinished { name: String, ok: bool },
-    Prose { text: String },
+    Round {
+        round: u32,
+    },
+    ToolCalled {
+        name: String,
+        summary: String,
+    },
+    ToolFinished {
+        name: String,
+        ok: bool,
+    },
+    Prose {
+        text: String,
+    },
+    Step {
+        done: u32,
+        total: u32,
+        label: String,
+    },
 }
 
 impl From<AgentEvent> for AgentEventView {
@@ -175,6 +190,7 @@ impl From<AgentEvent> for AgentEventView {
             }
             AgentEvent::ToolFinished { name, ok } => AgentEventView::ToolFinished { name, ok },
             AgentEvent::Prose { text } => AgentEventView::Prose { text },
+            AgentEvent::Step { done, total, label } => AgentEventView::Step { done, total, label },
         }
     }
 }
@@ -195,6 +211,9 @@ pub struct ReviewReportView {
     pub findings: Vec<FindingView>,
     pub files_read: Vec<String>,
     pub rounds: u32,
+    /// Kolik souborů projekt má. Bez toho vypadá „bez nálezu" po dvou
+    /// prošlých souborech stejně jako po všech čtrnácti.
+    pub files_total: u32,
     /// Skončilo se na limitu kol, ne proto, že model dokončil práci.
     pub hit_round_limit: bool,
     pub summary: String,
@@ -801,6 +820,7 @@ pub async fn run_review(
             .map(|p| p.to_string())
             .collect(),
         rounds: out.report.rounds,
+        files_total: out.report.files_total,
         hit_round_limit: out.report.hit_round_limit,
         summary: out.summary,
         total_ms: out.total_ms,

@@ -136,9 +136,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hooks = AgentHooks::events(Arc::new(move |e: AgentEvent| {
         let mut p = sber.lock().expect("zámek");
         match e {
+            // Kola jsou teď uvnitř jednoho souboru, takže hlavičku dělá
+            // `Step` — kolo samo o sobě už uživateli nic neříká.
             AgentEvent::RoundStarted { round } => {
                 p.kol = round;
-                println!("\n--- {round}. kolo ---");
+            }
+            AgentEvent::Step { done, total, label } => {
+                if label == "hotovo" {
+                    println!("\n--- prošlo se {done} z {total} ---");
+                } else {
+                    println!("\n--- [{}/{total}] {label} ---", done + 1);
+                }
             }
             AgentEvent::ToolCalled { name, summary } => {
                 *p.volani.entry(name.clone()).or_default() += 1;
@@ -188,7 +196,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("\n=== Průběh ===");
-    println!("  kol:              {} z 12", report.rounds);
+    println!(
+        "  pokrytí:          {} z {} souborů",
+        report.files_read.len(),
+        report.files_total
+    );
+    println!("  kol celkem:       {}", report.rounds);
     println!("  přečtené soubory: {}", report.files_read.len());
     for path in &report.files_read {
         println!("      {path}");

@@ -360,6 +360,22 @@ impl Toolbox {
         }
     }
 
+    /// Nástroje pro průchod **jedním souborem**.
+    ///
+    /// Obsah souboru dostane model rovnou v zadání, takže si ho nemá čím
+    /// vyžádat — a hlavně se nemá kam zatoulat. Výběr souborů dělá
+    /// [`ReviewService`], ne model; měřením vyšlo najevo, že dva běhy nad
+    /// stejným kódem otevřou úplně jiné soubory a jeden z nich minul jedinou
+    /// bezpečnostní díru v projektu.
+    ///
+    /// [`ReviewService`]: crate::review::ReviewService
+    pub fn for_single_file(artifacts: SharedArtifacts) -> Self {
+        Self {
+            tools: vec![Arc::new(ReportFinding::new(artifacts.clone()))],
+            artifacts,
+        }
+    }
+
     pub fn specs(&self) -> Vec<ToolSpec> {
         self.tools.iter().map(|t| t.spec()).collect()
     }
@@ -432,15 +448,14 @@ pub mod fake_fs {
             if let Some(e) = &self.selhani {
                 return Err(anvil_domain::error::DomainError::storage(e));
             }
-            let pripona = glob.and_then(|g| g.strip_prefix("*.").map(str::to_string));
+            // Stejné porovnávání vzorů jako na disku. Dvojník, který vzorům
+            // rozumí jinak než skutečnost, dělá ze zelených testů past —
+            //  mu procházel, zatímco na disku nesedl na nic.
             Ok(self
                 .soubory
                 .iter()
                 .map(|(p, _)| p.clone())
-                .filter(|p| match &pripona {
-                    Some(ext) => p.extension().as_deref() == Some(ext.as_str()),
-                    None => true,
-                })
+                .filter(|p| glob.is_none_or(|g| anvil_domain::workspace::matches_glob(p, g)))
                 .collect())
         }
 

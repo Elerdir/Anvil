@@ -203,9 +203,159 @@ impl Workspace {
     }
 }
 
+/// Vyhoví cesta vzoru?
+///
+/// Umí `*` (cokoli uvnitř jednoho segmentu), `**` (libovolně mnoho segmentů
+/// včetně nuly) a `?` (jeden znak).
+///
+/// Předchozí verze porovnávala podřetězec a `src/**/*.rs` — nejběžnější
+/// zápis pro „všechny zdrojáky" — jí **nevyhověl ani jednou**. Nevrátila
+/// chybu, vrátila prázdno, takže se model doslova dozvěděl, že v projektu
+/// žádný takový soubor není, a podle toho se zařídil. Filtr, který mlčky
+/// nevrací nic, je horší než žádný filtr.
+///
+/// Porovnává se **bez ohledu na velikost písmen**: jde o vyhledávací filtr,
+/// kde je `*.RS` očividně míněné jako `*.rs`, a na Windows navíc velikost
+/// písmen v cestě stejně nerozhoduje.
+pub fn matches_glob(path: &RelativePath, glob: &str) -> bool {
+    let glob = glob.trim().trim_start_matches("./");
+    if glob.is_empty() || glob == "*" || glob == "**" {
+        return true;
+    }
+
+    let cesta = path.as_str().to_lowercase();
+    let vzor = glob.to_lowercase();
+
+    let segmenty_cesty: Vec<&str> = cesta.split('/').collect();
+    let mut segmenty_vzoru: Vec<&str> = vzor.split('/').collect();
+
+    // Vzor bez lomítka se týká názvu souboru kdekoli ve stromu: kdo napíše
+    // `*.rs`, myslí tím celý projekt, ne jen jeho kořen.
+    if segmenty_vzoru.len() == 1 {
+        segmenty_vzoru.insert(0, "**");
+    }
+
+    match_segments(&segmenty_vzoru, &segmenty_cesty)
+}
+
+/// Porovnání po segmentech cesty. `**` se zkouší roztáhnout přes všechny
+/// délky — vzorů je pár a cesty jsou krátké, takže se to vejde bez ohledu
+/// na to, že jde o exponenciální algoritmus v nejhorším případě.
+fn match_segments(vzor: &[&str], cesta: &[&str]) -> bool {
+    match vzor.split_first() {
+        None => cesta.is_empty(),
+        Some((&"**", zbytek)) => (0..=cesta.len()).any(|i| match_segments(zbytek, &cesta[i..])),
+        Some((prvni, zbytek)) => match cesta.split_first() {
+            Some((segment, zbytek_cesty)) if match_segment(prvni, segment) => {
+                match_segments(zbytek, zbytek_cesty)
+            }
+            _ => false,
+        },
+    }
+}
+
+/// Porovnání jednoho segmentu s `*` a `?`.
+///
+/// Hvězdička se řeší návratem zpět místo rekurze: `a*b*c` se jinak na dlouhém
+/// názvu rozjede do stromu volání, který nikam nevede.
+fn match_segment(vzor: &str, jmeno: &str) -> bool {
+    let v: Vec<char> = vzor.chars().collect();
+    let j: Vec<char> = jmeno.chars().collect();
+    let (mut vi, mut ji) = (0usize, 0usize);
+    // Kam se vrátit, když další znak po hvězdičce nesedne.
+    let mut hvezdicka: Option<usize> = None;
+    let mut navrat = 0usize;
+
+    while ji < j.len() {
+        if vi < v.len() && (v[vi] == '?' || v[vi] == j[ji]) {
+            vi += 1;
+            ji += 1;
+        } else if vi < v.len() && v[vi] == '*' {
+            hvezdicka = Some(vi);
+            navrat = ji;
+            vi += 1;
+        } else if let Some(h) = hvezdicka {
+            vi = h + 1;
+            navrat += 1;
+            ji = navrat;
+        } else {
+            return false;
+        }
+    }
+
+    // Zbylé hvězdičky můžou spolknout prázdno, cokoli jiného ne.
+    v[vi..].iter().all(|c| *c == '*')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- vzory ---
+
+    fn sedne(vzor: &str, p: &str) -> bool {
+        matches_glob(&RelativePath::parse(p).unwrap(), vzor)
+    }
+
+    /// Přesně tenhle vzor poslal skutečný model při review a starý filtr na
+    /// něj nevrátil jediný soubor. Model z toho vyvodil, že v projektu žádné
+    /// zdrojáky nejsou, a čtyři kola hledal jinde.
+    #[test]
+    fn hvezdicky_pres_slozky_najdou_zdrojaky() {
+        assert!(sedne("src/**/*.rs", "src/main.rs"));
+        assert!(sedne("src/**/*.rs", "src/ai/gemma.rs"));
+        assert!(sedne("src/**/*.rs", "src/a/b/c/hluboko.rs"));
+        assert!(!sedne("src/**/*.rs", "tests/main.rs"));
+        assert!(!sedne("src/**/*.rs", "src/data.json"));
+    }
+
+    #[test]
+    fn vzor_bez_lomitka_plati_v_celem_stromu() {
+        // Kdo napíše `*.rs`, myslí celý projekt, ne jen jeho kořen.
+        assert!(sedne("*.rs", "src/hluboko/modul.rs"));
+        assert!(sedne("Cargo.toml", "crates/domain/Cargo.toml"));
+        assert!(!sedne("*.rs", "src/styl.css"));
+    }
+
+    #[test]
+    fn hvezdicka_neprekroci_lomitko() {
+        assert!(sedne("src/*.rs", "src/main.rs"));
+        assert!(
+            !sedne("src/*.rs", "src/ai/gemma.rs"),
+            "jedna hvězdička je jeden segment"
+        );
+    }
+
+    #[test]
+    fn dve_hvezdicky_spolknou_i_nula_slozek() {
+        assert!(sedne("src/**/main.rs", "src/main.rs"));
+        assert!(sedne("**/main.rs", "main.rs"));
+    }
+
+    #[test]
+    fn otaznik_je_prave_jeden_znak() {
+        assert!(sedne("src/mai?.rs", "src/main.rs"));
+        assert!(!sedne("src/mai?.rs", "src/main2.rs"));
+    }
+
+    #[test]
+    fn velikost_pismen_nerozhoduje() {
+        assert!(sedne("*.RS", "src/main.rs"));
+        assert!(sedne("SRC/**", "src/main.rs"));
+    }
+
+    #[test]
+    fn prazdny_vzor_propusti_vsechno() {
+        assert!(sedne("", "cokoli/jineho.txt"));
+        assert!(sedne("*", "cokoli/jineho.txt"));
+        assert!(sedne("**", "cokoli/jineho.txt"));
+    }
+
+    #[test]
+    fn vice_hvezdicek_v_jednom_segmentu() {
+        assert!(sedne("*test*.rs", "src/muj_test_modul.rs"));
+        assert!(!sedne("*test*.rs", "src/modul.rs"));
+    }
 
     fn ws() -> Workspace {
         // Absolutní tvar se liší podle platformy, ale test má běžet na obou.

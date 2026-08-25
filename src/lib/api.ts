@@ -122,6 +122,8 @@ export interface ReviewReportView {
   findings: FindingView[];
   filesRead: string[];
   rounds: number;
+  /** Kolik souborů projekt má — proti `filesRead`, ať je vidět pokrytí. */
+  filesTotal: number;
   /** Skončilo se na limitu kol, ne proto, že model dokončil práci. */
   hitRoundLimit: boolean;
   summary: string;
@@ -133,7 +135,8 @@ export type AgentEventView =
   | { kind: "round"; round: number }
   | { kind: "tool_called"; name: string; summary: string }
   | { kind: "tool_finished"; name: string; ok: boolean }
-  | { kind: "prose"; text: string };
+  | { kind: "prose"; text: string }
+  | { kind: "step"; done: number; total: number; label: string };
 
 /** Chyba z příkazu. `cancelled` znamená, že to zrušil uživatel. */
 export class CommandError extends Error {

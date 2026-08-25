@@ -51,6 +51,13 @@ pub enum AgentEvent {
     Prose {
         text: String,
     },
+    /// Postup dlouhé práce složené z více kroků. Review jde soubor po souboru
+    /// a bez tohohle by uživatel u většího projektu koukal minuty na nic.
+    Step {
+        done: u32,
+        total: u32,
+        label: String,
+    },
 }
 
 pub type AgentEventCallback = Arc<dyn Fn(AgentEvent) + Send + Sync + 'static>;
@@ -789,6 +796,7 @@ mod tests {
                         AgentEvent::ToolCalled { name, .. } => format!("volám {name}"),
                         AgentEvent::ToolFinished { name, ok } => format!("hotovo {name} ok={ok}"),
                         AgentEvent::Prose { .. } => "text".into(),
+                        AgentEvent::Step { done, total, .. } => format!("krok {done}/{total}"),
                     });
                 })),
             )
