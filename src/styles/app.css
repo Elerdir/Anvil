@@ -171,11 +171,27 @@
 
 .main {
   display: grid;
-  /* Čtyři řádky a všechny čtyři prvky jsou vždy přítomné — `.notices`
-     i `.dock` se vykreslují i prázdné. Kdyby se objevovaly a mizely,
-     posunulo by se `1fr` na jiný řádek a konverzace by přestala růst. */
   grid-template-rows: auto auto 1fr auto;
   min-height: 0;
+}
+
+/* Každý prvek má svůj řádek **napevno**.
+   Samotné pořadí v mřížce nestačí: stačí, aby jeden z nich zmizel
+   (`display: none`), a zbylé se posunou o řádek výš — `1fr` pak spadne
+   na `.dock`, ten se roztáhne přes zbytek okna a pole pro dotaz zůstane
+   viset nahoře v něm. Přesně to se stalo, když `.notices:empty` schovávalo
+   prázdný pruh oznámení. S pevnými čísly řádků je to nemožné. */
+.topbar {
+  grid-row: 1;
+}
+.notices {
+  grid-row: 2;
+}
+.messages {
+  grid-row: 3;
+}
+.dock {
+  grid-row: 4;
 }
 
 .topbar {
@@ -232,9 +248,8 @@
 
 /* --- Oznámení --- */
 
-.notices:empty {
-  display: none;
-}
+/* Prázdný pruh oznámení se **neschovává**. Sám o sobě nemá výšku ani rám,
+   takže není co skrývat — a `display: none` by ho vyřadilo z mřížky. */
 
 .banner {
   display: flex;
