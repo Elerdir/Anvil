@@ -122,6 +122,58 @@ mod tests {
         }
     }
 
+    /// Pole pro dotaz musí zůstat ukotvené dole.
+    ///
+    /// Mřížka `.main` má čtyři řádky a `1fr` patří konverzaci. Když jeden
+    /// z prvků zmizí (`display: none`), zbylé se posunou o řádek výš, `1fr`
+    /// spadne na `.dock`, ten se roztáhne přes zbytek okna a pole zůstane
+    /// viset nahoře v něm. Uživatel to nahlásil **dvakrát**; podruhé kvůli
+    /// `.notices:empty { display: none }`.
+    ///
+    /// Testuje se CSS textem, protože jinak to nemá kdo chytit: v prohlížeči
+    /// se chyba maskuje tím, že tam Tauri příkazy selžou a vykreslí se
+    /// chybový banner — a s neprázdným `.notices` je rozvržení správně.
+    #[test]
+    fn prvky_hlavni_mrizky_maji_pevne_radky() {
+        // Komentáře pryč: test má posuzovat pravidla, ne text kolem nich.
+        // Bez toho ho shodí i vysvětlení, proč tam něco nesmí být.
+        let syrove = include_str!("../../src/styles/app.css");
+        let mut css = String::with_capacity(syrove.len());
+        let mut zbytek = syrove;
+        while let Some(zacatek) = zbytek.find("/*") {
+            css.push_str(&zbytek[..zacatek]);
+            match zbytek[zacatek..].find("*/") {
+                Some(konec) => zbytek = &zbytek[zacatek + konec + 2..],
+                None => zbytek = "",
+            }
+        }
+        css.push_str(zbytek);
+
+        for (selektor, radek) in [
+            (".topbar", "grid-row: 1"),
+            (".notices", "grid-row: 2"),
+            (".messages", "grid-row: 3"),
+            (".dock", "grid-row: 4"),
+        ] {
+            let blok = css
+                .split(&format!("\n{selektor} {{"))
+                .nth(1)
+                .unwrap_or_else(|| panic!("v app.css chybí pravidlo pro {selektor}"));
+            let blok = blok.split('}').next().unwrap_or_default();
+            assert!(
+                blok.contains(radek),
+                "{selektor} nemá `{radek}`. Bez pevného čísla řádku stačí, aby \
+                 jeden prvek mřížky zmizel, a pole pro dotaz se odlepí ode dna."
+            );
+        }
+
+        assert!(
+            !css.contains(".notices:empty"),
+            "`.notices:empty {{ display: none }}` vyřadí pruh oznámení z mřížky \
+             a rozhodí řádky. Prázdný pruh nemá výšku ani rám, takže není co skrývat."
+        );
+    }
+
     /// Když je engine přeložený v infrastruktuře, musí ho vidět i tenhle crate.
     /// Doplňuje kontrolu manifestu o skutečný stav překladu.
     #[test]
